@@ -34,6 +34,10 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn:active{opacity:.7}
 #hint{max-width:1100px;margin:12px auto 0;padding:10px 14px;border-radius:10px;background:#fff7dc;border:1px solid #f0e2a8;font-size:14px;line-height:1.5}
+#backupBar{max-width:1100px;margin:12px auto 0;padding:9px 14px;border-radius:10px;font-size:14px;display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);color:var(--sub)}
+#backupBar.warn{background:#fdecea;border-color:#f3c3bd;color:#8a2c22}
+#backupBar span{flex:1}
+#backupBar button{padding:6px 12px;border-radius:8px;border:1px solid currentColor;font-size:13px;white-space:nowrap}
 #crumbs{max-width:1100px;margin:16px auto 0;display:flex;align-items:center;gap:12px}
 #crumbs .path{font-size:15px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #crumbs .path button{color:var(--accent);padding:4px 2px}
@@ -77,7 +81,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-
 #pages{display:flex;flex-direction:column;align-items:center;gap:16px;padding:14px 12px 60px;min-width:100%;width:max-content}
 .page{position:relative;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.18);flex:none;-webkit-touch-callout:none}
 .page canvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
-.page canvas.ink,.page canvas.live{mix-blend-mode:multiply}
+.page canvas.hl{mix-blend-mode:multiply}
 .er-cursor{position:absolute;border:1.5px solid rgba(60,60,60,.6);border-radius:50%;pointer-events:none;transform:translate(-50%,-50%);background:rgba(255,255,255,.3)}
 .sel-box{position:absolute;border:1.5px dashed var(--accent);background:rgba(61,90,128,.06);pointer-events:none}
 .sel-menu{position:absolute;display:flex;gap:4px;transform:translateY(-100%);padding-bottom:6px;z-index:2}
@@ -126,6 +130,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-
   <div id="hint" hidden>
     <b>ホーム画面に追加してください。</b>Safariは、しばらく開かないサイトの保存データを消すことがあります。共有ボタン →「ホーム画面に追加」で、アプリとして使うとデータが消えにくくなります。ときどき「⋯ → バックアップを書き出す」もしておくと安心です。
   </div>
+  <div id="backupBar" hidden></div>
   <div id="crumbs" hidden></div>
   <div id="notes"></div>
   <input type="file" id="pdfInput" accept="application/pdf,.pdf" multiple hidden>
@@ -250,16 +255,17 @@ function sheet(title, items, body) {
 async function shareFile(blob, name) {
   const file = new File([blob], name, { type: blob.type });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file] }); return; }
-    catch (e) { if (e.name === 'AbortError') return; }
+    try { await navigator.share({ files: [file] }); return true; }
+    catch (e) { if (e.name === 'AbortError') return false; }
   }
   const a = el('a'); a.href = URL.createObjectURL(blob); a.download = name;
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  return true;
 }
 // 時間のかかる処理のあとは、ボタンを押してもらってから共有する(Safariの制限)
-function readySheet(title, blob, name) {
-  sheet(title, [{ label: '共有・保存する', fn: () => shareFile(blob, name) }]);
+function readySheet(title, blob, name, onDone, body) {
+  sheet(title, [{ label: '共有・保存する', fn: async () => { if (await shareFile(blob, name) && onDone) onDone(); } }], body);
 }
 const safeName = s => (s || 'ノート').replace(/[\\/:*?"<>|]/g, '_');
 const fmtDate = t => { const d = new Date(t); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; };
@@ -322,11 +328,18 @@ function drawStroke(ctx, s) {
   else ctx.stroke(strokePath(s));
   ctx.restore();
 }
-// 蛍光ペンを先に、ペンを上に描く
-function drawStrokes(ctx, strokes) {
-  for (const s of strokes) if (s.t === 'h') drawStroke(ctx, s);
-  for (const s of strokes) if (s.t !== 'h') drawStroke(ctx, s);
+// 書き込みは2枚の画像に分けて描く。
+// 蛍光ペン(kind='h'):下の文字が黒いまま透けるよう「乗算」で重ねる画像に描く
+// ペン(kind='p'):色がそのまま見えるよう普通に重ねる画像に描く(蛍光ペンより上)
+// c はページの (x, y) から幅 w(pt)の範囲を表す画像
+function paintLayer(c, strokes, kind, x, y, w) {
+  const ctx = c.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
+  if (!c.width) return;
+  const k = c.width / w; ctx.setTransform(k, 0, 0, k, -x * k, -y * k);
+  for (const s of strokes) if ((s.t === 'h') === (kind === 'h')) drawStroke(ctx, s);
 }
+function sizeCanvas(c, w, h) { if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } }
 function mkCanvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; }
 // ページ(またはその一部)を背景+書き込みで1枚の画像にする
 async function renderPageImage(pg, strokes, paperKey, k, reg) {
@@ -340,11 +353,14 @@ async function renderPageImage(pg, strokes, paperKey, k, reg) {
   } else {
     ctx.setTransform(k, 0, 0, k, -reg.x * k, -reg.y * k); drawPaper(ctx, pg, paperKey);
   }
-  const ink = mkCanvas(c.width, c.height), ic = ink.getContext('2d');
-  ic.setTransform(k, 0, 0, k, -reg.x * k, -reg.y * k); drawStrokes(ic, strokes);
+  const hl = mkCanvas(c.width, c.height);
+  paintLayer(hl, strokes, 'h', reg.x, reg.y, reg.w);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(ink, 0, 0); ctx.globalCompositeOperation = 'source-over';
-  ink.width = ink.height = 0;
+  ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(hl, 0, 0); ctx.globalCompositeOperation = 'source-over';
+  hl.width = hl.height = 0;
+  ctx.setTransform(k, 0, 0, k, -reg.x * k, -reg.y * k);
+  for (const s of strokes) if (s.t !== 'h') drawStroke(ctx, s);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   return c;
 }
 
@@ -370,7 +386,21 @@ async function refreshHome() {
   renderHome();
 }
 function goFolder(id) { curFolder = id; renderHome(); window.scrollTo(0, 0); }
+// バックアップ忘れのお知らせ(7日以上たったら赤く目立たせる)
+const BACKUP_DAYS = 7;
+function renderBackupBar() {
+  const bar = $('#backupBar'); bar.innerHTML = '';
+  if (!notes.length) { bar.hidden = true; return; }
+  const last = set.lastBackup, days = last ? Math.floor((Date.now() - last) / 86400000) : null;
+  const msg = days === null ? 'まだバックアップがありません。iPadのデータが消えたときのために、書き出しておきましょう。'
+    : days >= BACKUP_DAYS ? `前回のバックアップから${days}日たちました(${fmtDate(last)})。そろそろバックアップをしましょう。`
+    : `最後のバックアップ:${fmtDate(last)}(${days === 0 ? '今日' : days + '日前'})`;
+  bar.className = days === null || days >= BACKUP_DAYS ? 'warn' : '';
+  const b = el('button', null, '今すぐバックアップ'); b.onclick = exportBackup;
+  bar.append(el('span', null, msg), b); bar.hidden = false;
+}
 function renderHome() {
+  renderBackupBar();
   const cr = $('#crumbs'); cr.innerHTML = ''; cr.hidden = !curFolder;
   if (curFolder) {
     const back = el('button', 'btn', '‹ 戻る'); back.onclick = () => goFolder(parentOf(folderById(curFolder)));
@@ -549,8 +579,10 @@ async function exportBackup() {
     const blob = new Blob([MAGIC, len, hb, ...pdfs.map(p => p.data)], { type: 'application/octet-stream' });
     const d = new Date();
     busy(false);
+    const tip = el('div', 'body', '「共有・保存する」→「"ファイル"に保存」で保存先を選びます。iPadが壊れたりなくしたりしても残るよう、「iCloud Drive」やGoogleドライブがおすすめです。');
     readySheet(`バックアップができました(${(blob.size / 1048576).toFixed(1)}MB)`, blob,
-      `pdfnote-backup-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}.pdfnote`);
+      `pdfnote-backup-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}.pdfnote`,
+      () => { set.lastBackup = Date.now(); saveSet(); renderBackupBar(); toast('バックアップを保存しました'); }, tip);
   } catch (e) { busy(false); alert('バックアップに失敗しました: ' + e.message); }
 }
 async function restoreBackup(file) {
@@ -684,10 +716,10 @@ function buildPages() {
   io = new IntersectionObserver(onIO, { root: scroller, rootMargin: '60% 0px' });
   for (const pg of cur.note.pages) {
     const e = el('div', 'page'); e.dataset.id = pg.id;
-    const bg = el('canvas', 'bg'), ink = el('canvas', 'ink');
-    bg.width = bg.height = ink.width = ink.height = 0;
-    e.append(bg, ink); pagesEl.append(e);
-    pstate.set(pg.id, { pg, el: e, bg, ink, r: 0, visible: false, task: null });
+    const bg = el('canvas', 'bg'), hl = el('canvas', 'hl'), ink = el('canvas', 'ink');
+    for (const c of [bg, hl, ink]) c.width = c.height = 0;
+    e.append(bg, hl, ink); pagesEl.append(e);
+    pstate.set(pg.id, { pg, el: e, bg, hl, ink, r: 0, visible: false, task: null });
     io.observe(e);
   }
   layout();
@@ -712,7 +744,8 @@ function onIO(entries) {
 function release(st) {
   dropDetail(st);
   if (st.task) { st.task.cancel(); st.task = null; }
-  st.bg.width = st.bg.height = 0; st.ink.width = st.ink.height = 0; st.r = 0;
+  for (const c of [st.bg, st.hl, st.ink]) c.width = c.height = 0;
+  st.r = 0;
 }
 let rendering = false, renderAgain = false;
 function scheduleRender() {
@@ -761,13 +794,13 @@ async function renderBg(st, r) {
   return true;
 }
 function drawInk(st) {
-  const c = st.ink, w = st.bg.width, h = st.bg.height;
-  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const w = st.bg.width, h = st.bg.height;
+  // 蛍光ペンは太くて輪郭がやわらかいので、半分の細かさにしてメモリを節約する
+  sizeCanvas(st.ink, w, h); sizeCanvas(st.hl, Math.ceil(w / 2), Math.ceil(h / 2));
   if (!w) return;
-  const ctx = c.getContext('2d');
-  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, w, h);
-  const k = w / st.pg.w; ctx.setTransform(k, 0, 0, k, 0, 0);
-  drawStrokes(ctx, inkMap.get(st.pg.id) || []);
+  const strokes = inkMap.get(st.pg.id) || [];
+  paintLayer(st.hl, strokes, 'h', 0, 0, st.pg.w);
+  paintLayer(st.ink, strokes, 'p', 0, 0, st.pg.w);
   drawDetailInk(st);
 }
 
@@ -782,15 +815,14 @@ function placeCanvas(c, pg, reg) {
 function dropDetail(st) {
   if (st.dtask) { st.dtask.cancel(); st.dtask = null; }
   const d = st.detail; if (!d) return;
-  for (const c of [d.bg, d.ink]) { c.width = c.height = 0; c.remove(); }
+  for (const c of [d.bg, d.hl, d.ink]) { c.width = c.height = 0; c.remove(); }
   st.detail = null;
 }
 function drawDetailInk(st) {
   const d = st.detail; if (!d) return;
-  const ctx = d.ink.getContext('2d');
-  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, d.ink.width, d.ink.height);
-  ctx.setTransform(d.r, 0, 0, d.r, -d.x * d.r, -d.y * d.r);
-  drawStrokes(ctx, inkMap.get(st.pg.id) || []);
+  const strokes = inkMap.get(st.pg.id) || [];
+  paintLayer(d.hl, strokes, 'h', d.x, d.y, d.w);
+  paintLayer(d.ink, strokes, 'p', d.x, d.y, d.w);
 }
 let detailTimer = null, detailGen = 0;
 function scheduleDetails() { clearTimeout(detailTimer); detailTimer = setTimeout(updateDetails, 180); }
@@ -824,12 +856,12 @@ async function updateDetails() {
     }
     if (gen !== detailGen || !st.visible || !pstate.has(st.pg.id)) { bg.width = bg.height = 0; return; }
     dropDetail(st);
-    const ink = mkCanvas(bg.width, bg.height);
-    bg.className = 'dbg'; ink.className = 'ink';
-    placeCanvas(bg, st.pg, reg); placeCanvas(ink, st.pg, reg);
+    const hl = mkCanvas(bg.width / 2, bg.height / 2), ink = mkCanvas(bg.width, bg.height);
+    bg.className = 'dbg'; hl.className = 'hl'; ink.className = 'ink';
+    for (const c of [bg, hl, ink]) placeCanvas(c, st.pg, reg);
     // 全体の書き込みの上に詳細の背景をかぶせ、その上に詳細の書き込みを描く
-    st.ink.after(bg, ink);
-    st.detail = { ...reg, r, bg, ink };
+    st.ink.after(bg, hl, ink);
+    st.detail = { ...reg, r, bg, hl, ink };
     drawDetailInk(st);
   }
 }
@@ -944,8 +976,8 @@ function toPage(e, st) {
   return { x: r2((e.clientX - r.left) / r.width * st.pg.w), y: r2((e.clientY - r.top) / r.height * st.pg.h) };
 }
 // 書いている途中の線を描く画像。拡大中は高画質部分と同じ範囲・細かさにする
-function makeLive(st, pt) {
-  const c = el('canvas', 'live'), d = st.detail;
+function makeLive(st, pt, highlighter) {
+  const c = el('canvas', highlighter ? 'live hl' : 'live'), d = st.detail;
   const reg = d && inBox(pt, d) ? { x: d.x, y: d.y, w: d.w, h: d.h, r: d.r }
     : { x: 0, y: 0, w: st.pg.w, h: st.pg.h, r: st.bg.width ? st.bg.width / st.pg.w : targetR(st.pg) };
   c.width = Math.round(reg.w * reg.r); c.height = Math.round(reg.h * reg.r);
@@ -983,7 +1015,7 @@ pagesEl.addEventListener('pointerdown', e => {
     const stroke = { t: t === 'pen' ? 'p' : 'h', c: COLORS[cfg.c], w: (t === 'pen' ? PEN_W : HL_W)[cfg.s], p: [pt.x, pt.y] };
     if (t === 'hl') stroke.a = HL_A[cfg.a];
     act = { ...base, type: 'draw', stroke };
-    [act.live, act.liveReg] = makeLive(st, pt); drawLive();
+    [act.live, act.liveReg] = makeLive(st, pt, t === 'hl'); drawLive();
   } else if (t === 'er') {
     clearSel();
     act = { ...base, type: 'erase', before: inkMap.get(st.pg.id) || [], last: pt, changed: false };
