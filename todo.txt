@@ -5,6 +5,7 @@ PDFノート やること
 公開URL: https://sangatsuunagi-prog.github.io/pdf-note/
 
 [ ] iPadのSafariでURLを開き、「ホーム画面に追加」する
+[ ] iPadで確認:拡大して書いてもペンがガビガビにならないか(2026-10-22 修正済み、確認待ち)
 [ ] iPadで確認:Apple Pencilで書ける/手のひらで線が出ない
 [ ] iPadで確認:ピンチで拡大・縮小、2本指タップで元に戻す
 [ ] iPadで確認:切り取り→コピー、共有

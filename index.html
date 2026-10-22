@@ -658,6 +658,7 @@ function onIO(entries) {
   scheduleRender();
 }
 function release(st) {
+  dropDetail(st);
   if (st.task) { st.task.cancel(); st.task = null; }
   st.bg.width = st.bg.height = 0; st.ink.width = st.ink.height = 0; st.r = 0;
 }
@@ -667,7 +668,7 @@ function scheduleRender() {
   rendering = true;
   requestAnimationFrame(async () => {
     try { do { renderAgain = false; await renderVisible(); } while (renderAgain); }
-    finally { rendering = false; }
+    finally { rendering = false; scheduleDetails(); }
   });
 }
 async function renderVisible() {
@@ -715,6 +716,70 @@ function drawInk(st) {
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, w, h);
   const k = w / st.pg.w; ctx.setTransform(k, 0, 0, k, 0, 0);
   drawStrokes(ctx, inkMap.get(st.pg.id) || []);
+  drawDetailInk(st);
+}
+
+// ---------- 拡大時の高画質表示 ----------
+// ページ全体の画像は大きさに上限があるので、拡大中は画面に見えている部分だけを
+// 拡大率どおりの細かさで描いた画像(detail)を上に重ねる
+function placeCanvas(c, pg, reg) {
+  const s = c.style;
+  s.left = reg.x / pg.w * 100 + '%'; s.top = reg.y / pg.h * 100 + '%';
+  s.width = reg.w / pg.w * 100 + '%'; s.height = reg.h / pg.h * 100 + '%';
+}
+function dropDetail(st) {
+  if (st.dtask) { st.dtask.cancel(); st.dtask = null; }
+  const d = st.detail; if (!d) return;
+  for (const c of [d.bg, d.ink]) { c.width = c.height = 0; c.remove(); }
+  st.detail = null;
+}
+function drawDetailInk(st) {
+  const d = st.detail; if (!d) return;
+  const ctx = d.ink.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, d.ink.width, d.ink.height);
+  ctx.setTransform(d.r, 0, 0, d.r, -d.x * d.r, -d.y * d.r);
+  drawStrokes(ctx, inkMap.get(st.pg.id) || []);
+}
+let detailTimer = null, detailGen = 0;
+function scheduleDetails() { clearTimeout(detailTimer); detailTimer = setTimeout(updateDetails, 180); }
+async function updateDetails() {
+  const gen = ++detailGen;
+  if (!cur.note || pinch) return;
+  const rf = cssScale() * (window.devicePixelRatio || 1), vb = scroller.getBoundingClientRect();
+  for (const st of pstate.values()) {
+    if (gen !== detailGen) return;
+    if (!st.visible || !st.r || st.r >= rf * 0.98) { dropDetail(st); continue; }
+    const pr = st.el.getBoundingClientRect();
+    const k = pr.width / st.pg.w, mx = vb.width * 0.15, my = vb.height * 0.15;
+    const x1 = Math.max(0, (vb.left - mx - pr.left) / k), x2 = Math.min(st.pg.w, (vb.right + mx - pr.left) / k);
+    const y1 = Math.max(0, (vb.top - my - pr.top) / k), y2 = Math.min(st.pg.h, (vb.bottom + my - pr.top) / k);
+    if (x2 - x1 < 1 || y2 - y1 < 1) { dropDetail(st); continue; }
+    const d = st.detail;
+    if (d && Math.abs(d.r - rf) < 0.01 && d.x <= x1 && d.y <= y1 && d.x + d.w >= x2 && d.y + d.h >= y2) continue;
+    const reg = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+    const r = Math.min(rf, Math.sqrt(12e6 / (reg.w * reg.h)));
+    const bg = mkCanvas(reg.w * r, reg.h * r), ctx = bg.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, bg.width, bg.height);
+    if (st.pg.type === 'pdf') {
+      try {
+        const page = await (await getDoc(st.pg.pdf)).getPage(st.pg.n);
+        if (st.dtask) st.dtask.cancel();
+        st.dtask = page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: r, offsetX: -reg.x * r, offsetY: -reg.y * r }) });
+        await st.dtask.promise; st.dtask = null;
+      } catch (e) { bg.width = bg.height = 0; if (e && e.name !== 'RenderingCancelledException') console.error(e); continue; }
+    } else {
+      ctx.setTransform(r, 0, 0, r, -reg.x * r, -reg.y * r); drawPaper(ctx, st.pg, cur.note.paper);
+    }
+    if (gen !== detailGen || !st.visible || !pstate.has(st.pg.id)) { bg.width = bg.height = 0; return; }
+    dropDetail(st);
+    const ink = mkCanvas(bg.width, bg.height);
+    bg.className = 'dbg'; ink.className = 'ink';
+    placeCanvas(bg, st.pg, reg); placeCanvas(ink, st.pg, reg);
+    // 全体の書き込みの上に詳細の背景をかぶせ、その上に詳細の書き込みを描く
+    st.ink.after(bg, ink);
+    st.detail = { ...reg, r, bg, ink };
+    drawDetailInk(st);
+  }
 }
 
 // ---------- 書き込みの保存・元に戻す ----------
@@ -826,19 +891,22 @@ function toPage(e, st) {
   const r = st.el.getBoundingClientRect();
   return { x: r2((e.clientX - r.left) / r.width * st.pg.w), y: r2((e.clientY - r.top) / r.height * st.pg.h) };
 }
-function makeLive(st) {
-  const c = el('canvas', 'live');
-  const k = st.bg.width ? st.bg.width / st.pg.w : targetR(st.pg);
-  c.width = Math.round(st.pg.w * k); c.height = Math.round(st.pg.h * k);
-  st.el.append(c); return c;
+// 書いている途中の線を描く画像。拡大中は高画質部分と同じ範囲・細かさにする
+function makeLive(st, pt) {
+  const c = el('canvas', 'live'), d = st.detail;
+  const reg = d && inBox(pt, d) ? { x: d.x, y: d.y, w: d.w, h: d.h, r: d.r }
+    : { x: 0, y: 0, w: st.pg.w, h: st.pg.h, r: st.bg.width ? st.bg.width / st.pg.w : targetR(st.pg) };
+  c.width = Math.round(reg.w * reg.r); c.height = Math.round(reg.h * reg.r);
+  placeCanvas(c, st.pg, reg);
+  st.el.append(c); return [c, reg];
 }
 let liveQueued = false;
 function queueLive() { if (liveQueued) return; liveQueued = true; requestAnimationFrame(() => { liveQueued = false; drawLive(); }); }
 function drawLive() {
   if (!act || !act.live) return;
-  const c = act.live, ctx = c.getContext('2d'), k = c.width / act.st.pg.w;
+  const c = act.live, ctx = c.getContext('2d'), g = act.liveReg;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
-  ctx.setTransform(k, 0, 0, k, 0, 0);
+  ctx.setTransform(g.r, 0, 0, g.r, -g.x * g.r, -g.y * g.r);
   if (act.type === 'draw') drawStroke(ctx, { ...act.stroke });
   else {
     const p = act.poly; if (p.length < 4) return;
@@ -863,7 +931,7 @@ pagesEl.addEventListener('pointerdown', e => {
     const stroke = { t: t === 'pen' ? 'p' : 'h', c: COLORS[cfg.c], w: (t === 'pen' ? PEN_W : HL_W)[cfg.s], p: [pt.x, pt.y] };
     if (t === 'hl') stroke.a = HL_A[cfg.a];
     act = { ...base, type: 'draw', stroke };
-    act.live = makeLive(st); drawLive();
+    [act.live, act.liveReg] = makeLive(st, pt); drawLive();
   } else if (t === 'er') {
     clearSel();
     act = { ...base, type: 'erase', before: inkMap.get(st.pg.id) || [], last: pt, changed: false };
@@ -875,11 +943,11 @@ pagesEl.addEventListener('pointerdown', e => {
       act = { ...base, type: 'move', start: pt, orig, idx: orig.map(s => sel.set.has(s)), result: orig };
     } else {
       clearSel();
-      act = { ...base, type: 'lasso', poly: [pt.x, pt.y] }; act.live = makeLive(st);
+      act = { ...base, type: 'lasso', poly: [pt.x, pt.y] }; [act.live, act.liveReg] = makeLive(st, pt);
     }
   } else if (t === 'crop') {
     clearSel();
-    act = { ...base, type: 'crop', poly: [pt.x, pt.y] }; act.live = makeLive(st);
+    act = { ...base, type: 'crop', poly: [pt.x, pt.y] }; [act.live, act.liveReg] = makeLive(st, pt);
   }
   try { pe.setPointerCapture(e.pointerId); } catch {}
 });
@@ -1102,6 +1170,7 @@ function updatePageNo() { if (cur.note) $('#pageno').textContent = `${currentInd
 scroller.addEventListener('scroll', () => {
   if (pnQueued) return; pnQueued = true;
   requestAnimationFrame(() => { pnQueued = false; updatePageNo(); });
+  scheduleDetails();
 }, { passive: true });
 function scrollToPage(i) { const pg = cur.note.pages[i]; const st = pg && pstate.get(pg.id); if (st) scroller.scrollTop = st.el.offsetTop - 12; updatePageNo(); }
 async function insertBlankAfter(i) {
