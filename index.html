@@ -54,6 +54,19 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-
 .card .t{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:28px}
 .card .m{font-size:12px;color:var(--sub)}
 .card .more{position:absolute;right:0;bottom:14px;width:30px;height:30px;border-radius:8px;font-size:18px;color:var(--sub)}
+/* 複数選択 */
+#home.selecting .home-head .hide-sel{display:none}
+#home.selecting{padding-bottom:calc(env(safe-area-inset-bottom) + 90px)}
+.card .chk{display:none;position:absolute;left:6px;top:6px;width:26px;height:26px;border-radius:50%;border:2px solid #fff;background:rgba(0,0,0,.25);box-shadow:0 0 0 1px rgba(0,0,0,.2);color:#fff;font-size:15px;line-height:22px;text-align:center;pointer-events:none;z-index:2}
+#home.selecting .card .chk{display:block}
+#home.selecting .card .more{display:none}
+.card.sel .chk{background:var(--accent)}
+.card.sel .thumb{outline:3px solid var(--accent);outline-offset:2px}
+#selBar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--panel);border-top:1px solid var(--line);box-shadow:0 -2px 10px rgba(0,0,0,.08);padding:10px 16px calc(env(safe-area-inset-bottom) + 10px);display:flex;align-items:center;gap:8px}
+#selBar .cnt{flex:1;font-size:15px;font-weight:600}
+#selBar .btn:disabled{opacity:.35}
+#selBar .btn.danger{color:var(--danger)}
+body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 .empty{grid-column:1/-1;text-align:center;color:var(--sub);padding:60px 0;line-height:1.8}
 
 /* ---------- エディタ ---------- */
@@ -122,10 +135,11 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-
 <div id="home">
   <div class="home-head">
     <h1>PDFノート</h1>
-    <button class="btn primary" id="importBtn">PDFを読み込む</button>
-    <button class="btn" id="newBtn">空白ノート</button>
-    <button class="btn" id="newFolderBtn">＋フォルダ</button>
-    <button class="btn" id="homeMenu" aria-label="メニュー">⋯</button>
+    <button class="btn primary hide-sel" id="importBtn">PDFを読み込む</button>
+    <button class="btn hide-sel" id="newBtn">空白ノート</button>
+    <button class="btn hide-sel" id="newFolderBtn">＋フォルダ</button>
+    <button class="btn" id="selectBtn">選択</button>
+    <button class="btn hide-sel" id="homeMenu" aria-label="メニュー">⋯</button>
   </div>
   <div id="hint" hidden>
     <b>ホーム画面に追加してください。</b>Safariは、しばらく開かないサイトの保存データを消すことがあります。共有ボタン →「ホーム画面に追加」で、アプリとして使うとデータが消えにくくなります。ときどき「⋯ → バックアップを書き出す」もしておくと安心です。
@@ -133,6 +147,12 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-
   <div id="backupBar" hidden></div>
   <div id="crumbs" hidden></div>
   <div id="notes"></div>
+  <div id="selBar" hidden>
+    <span class="cnt" id="selCount"></span>
+    <button class="btn" id="selAll">すべて選択</button>
+    <button class="btn" id="selMove">フォルダへ移動</button>
+    <button class="btn danger" id="selDel">削除</button>
+  </div>
   <input type="file" id="pdfInput" accept="application/pdf,.pdf" multiple hidden>
   <input type="file" id="restoreInput" hidden>
 </div>
@@ -385,7 +405,76 @@ async function refreshHome() {
   if (!folderById(curFolder)) curFolder = null;
   renderHome();
 }
-function goFolder(id) { curFolder = id; renderHome(); window.scrollTo(0, 0); }
+function goFolder(id) { curFolder = id; selected.clear(); renderHome(); window.scrollTo(0, 0); }
+
+// 複数選択(「選択」ボタン)。キーは 'n:ノートid' / 'f:フォルダid'
+let selecting = false;
+const selected = new Set();
+function setSelecting(on) {
+  selecting = on; selected.clear();
+  $('#home').classList.toggle('selecting', on);
+  document.body.classList.toggle('selecting', on);
+  $('#selectBtn').textContent = on ? '完了' : '選択';
+  $('#selBar').hidden = !on;
+  renderHome();
+}
+function toggleSel(key, card) {
+  if (selected.has(key)) selected.delete(key); else selected.add(key);
+  card.classList.toggle('sel', selected.has(key));
+  updateSelBar();
+}
+function shownKeys() {
+  return [...folders.filter(f => parentOf(f) === curFolder).map(f => 'f:' + f.id),
+          ...notes.filter(n => noteFolder(n) === curFolder).map(n => 'n:' + n.id)];
+}
+function updateSelBar() {
+  if (!selecting) return;
+  const keys = shownKeys();
+  for (const k of [...selected]) if (!keys.includes(k)) selected.delete(k);
+  $('#selCount').textContent = selected.size ? `${selected.size}件 選択中` : 'タップして選択';
+  $('#selAll').textContent = keys.length && selected.size === keys.length ? '選択を解除' : 'すべて選択';
+  $('#selAll').disabled = !keys.length;
+  $('#selMove').disabled = $('#selDel').disabled = !selected.size;
+}
+function selItems() {
+  const ids = k => [...selected].filter(s => s.startsWith(k)).map(s => s.slice(2));
+  return { ns: notes.filter(n => ids('n:').includes(n.id)), fs: folders.filter(f => ids('f:').includes(f.id)) };
+}
+function countLabel(ns, fs) { return [fs.length && `フォルダ${fs.length}個`, ns.length && `ノート${ns.length}冊`].filter(Boolean).join('と'); }
+function moveSelected() {
+  const { ns, fs } = selItems();
+  if (!ns.length && !fs.length) return;
+  const items = [{ label: 'ホーム(フォルダの外)', fn: () => done(null) }];
+  folders.filter(f => !fs.some(x => isInside(f.id, x.id)))
+    .map(f => [folderLabel(f), f]).sort((a, b) => a[0].localeCompare(b[0], 'ja'))
+    .forEach(([label, f]) => items.push({ label, fn: () => done(f.id) }));
+  sheet(`${countLabel(ns, fs)}の移動先`, items);
+  async function done(fid) {
+    await DB.putMany('notes', ns.map(n => ({ ...n, folderId: fid })));
+    await DB.putMany('folders', fs.map(f => ({ ...f, parentId: fid })));
+    selected.clear(); await refreshHome(); toast(`${countLabel(ns, fs)}を移動しました`);
+  }
+}
+async function deleteSelected() {
+  const { ns, fs } = selItems();
+  if (!ns.length && !fs.length) return;
+  let msg = `${countLabel(ns, fs)}を削除しますか？`;
+  if (ns.length) msg += '\nノートは書き込みも消え、元に戻せません。';
+  if (fs.length) msg += '\nフォルダの中身は消えずに、ひとつ外に出ます。';
+  if (!confirm(msg)) return;
+  busy('削除中…');
+  try {
+    if (ns.length) await removeNotes(ns);
+    // フォルダは中身をひとつ外へ出してから消す(選んだフォルダ同士が親子でも、消えない場所まで出す)
+    const gone = new Set(fs.map(f => f.id));
+    const upOf = id => { let f = folderById(id); while (f && gone.has(f.id)) f = folderById(parentOf(f)); return f ? f.id : null; };
+    const left = notes.filter(n => !ns.includes(n));
+    await DB.putMany('notes', left.filter(n => gone.has(noteFolder(n))).map(n => ({ ...n, folderId: upOf(n.folderId) })));
+    await DB.putMany('folders', folders.filter(x => !gone.has(x.id) && gone.has(parentOf(x))).map(x => ({ ...x, parentId: upOf(x.parentId) })));
+    await DB.delMany('folders', [...gone]);
+  } finally { busy(false); }
+  selected.clear(); await refreshHome(); toast('削除しました');
+}
 // バックアップ忘れのお知らせ(7日以上たったら赤く目立たせる)
 const BACKUP_DAYS = 7;
 function renderBackupBar() {
@@ -419,28 +508,35 @@ function renderHome() {
     const msg = curFolder ? 'このフォルダは空です。\n「PDFを読み込む」「空白ノート」で、このフォルダにノートを作れます。'
                           : 'ノートがありません。\n「PDFを読み込む」か「空白ノート」から始めましょう。\n「＋フォルダ」で科目ごとにまとめられます。';
     const e = el('div', 'empty', msg); e.style.whiteSpace = 'pre-line'; box.append(e);
+    updateSelBar();
     return;
   }
+  // 選択中はカードをタップすると選ぶ/外す
+  const tap = (card, key, open) => () => selecting ? toggleSel(key, card) : open();
+  const chk = (card, key) => { card.append(el('div', 'chk', '✓')); card.classList.toggle('sel', selected.has(key)); };
   for (const f of subs) {
     const nNotes = notes.filter(n => noteFolder(n) === f.id).length, nSubs = folders.filter(x => parentOf(x) === f.id).length;
     const card = el('div', 'card');
     const th = el('button', 'thumb folder');
     const fold = el('div', 'fold'); fold.style.setProperty('--fc', f.color || FOLDER_COLORS[0]);
     fold.append(el('span', null, `${nNotes}冊`)); th.append(fold);
-    th.onclick = () => goFolder(f.id);
+    th.onclick = tap(card, 'f:' + f.id, () => goFolder(f.id));
     const more = el('button', 'more', '⋯'); more.onclick = () => folderMenu(f);
     card.append(th, el('div', 't', f.name), el('div', 'm', `ノート${nNotes}冊` + (nSubs ? ` ・ フォルダ${nSubs}` : '')), more);
+    chk(card, 'f:' + f.id);
     box.append(card);
   }
   for (const n of list) {
     const card = el('div', 'card');
     const th = el('button', 'thumb');
     if (n.thumb) { const img = el('img'); img.src = n.thumb; img.alt = ''; th.append(img); }
-    th.onclick = () => openNote(n.id);
+    th.onclick = tap(card, 'n:' + n.id, () => openNote(n.id));
     const more = el('button', 'more', '⋯'); more.onclick = () => noteMenu(n);
     card.append(th, el('div', 't', n.title), el('div', 'm', `${fmtDate(n.updated)} ・ ${n.pages.length}ページ`), more);
+    chk(card, 'n:' + n.id);
     box.append(card);
   }
+  updateSelBar();
 }
 function noteMenu(n) {
   sheet(n.title, [
@@ -461,12 +557,17 @@ function chooseFolder(title, exclude, done) {
 }
 async function deleteNote(n) {
   if (!confirm(`「${n.title}」を削除しますか？\n書き込みも消え、元に戻せません。`)) return;
-  await DB.delMany('ink', n.pages.map(p => p.id));
-  const used = new Set(notes.filter(o => o.id !== n.id).flatMap(o => o.pages.map(p => p.pdf)));
-  const pdfIds = [...new Set(n.pages.filter(p => p.pdf && !used.has(p.pdf)).map(p => p.pdf))];
-  await DB.delMany('pdfs', pdfIds);
-  await DB.del('notes', n.id);
+  await removeNotes([n]);
   refreshHome(); toast('削除しました');
+}
+// ノートと書き込みを消す。PDFは他のノートで使われていなければ消す
+async function removeNotes(ns) {
+  const ids = new Set(ns.map(n => n.id));
+  await DB.delMany('ink', ns.flatMap(n => n.pages.map(p => p.id)));
+  const used = new Set(notes.filter(o => !ids.has(o.id)).flatMap(o => o.pages.map(p => p.pdf)));
+  const pdfIds = [...new Set(ns.flatMap(n => n.pages).filter(p => p.pdf && !used.has(p.pdf)).map(p => p.pdf))];
+  await DB.delMany('pdfs', pdfIds);
+  await DB.delMany('notes', [...ids]);
 }
 async function newFolder() {
   const where = curFolder ? `「${folderById(curFolder).name}」の中に作ります` : '';
@@ -563,6 +664,7 @@ function showHelp() {
     + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。\n'
     + '・よく使うペンは「＋登録」で保存。長押しで削除。\n'
     + '・「＋フォルダ」で科目ごとにまとめられます。フォルダの中にフォルダも作れます。ノートの「⋯」→「フォルダへ移動」。\n'
+    + '・右上の「選択」で、ノートやフォルダをまとめて選んで移動・削除できます。\n'
     + '・「ページ一覧」でページの移動・空白ページの追加・並べ替え・削除。\n'
     + '・データはこのiPadの中だけに保存されます。ときどきバックアップを書き出してください。';
   sheet('使い方', [], b);
@@ -1343,6 +1445,14 @@ $('#restoreInput').onchange = e => { const f = e.target.files[0]; e.target.value
 $('#newBtn').onclick = newBlankNote;
 $('#homeMenu').onclick = homeMenu;
 $('#newFolderBtn').onclick = newFolder;
+$('#selectBtn').onclick = () => setSelecting(!selecting);
+$('#selAll').onclick = () => {
+  const keys = shownKeys();
+  if (selected.size === keys.length) selected.clear(); else keys.forEach(k => selected.add(k));
+  renderHome();
+};
+$('#selMove').onclick = moveSelected;
+$('#selDel').onclick = deleteSelected;
 $('#backBtn').onclick = closeEditor;
 $('#undoBtn').onclick = undo;
 $('#redoBtn').onclick = redo;
