@@ -34,9 +34,15 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn:active{opacity:.7}
 #hint{max-width:1100px;margin:12px auto 0;padding:10px 14px;border-radius:10px;background:#fff7dc;border:1px solid #f0e2a8;font-size:14px;line-height:1.5}
-#folders{max-width:1100px;margin:16px auto 0;display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
-.chip{padding:7px 14px;border-radius:999px;background:var(--panel);border:1px solid var(--line);font-size:14px;white-space:nowrap}
-.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+#crumbs{max-width:1100px;margin:16px auto 0;display:flex;align-items:center;gap:12px}
+#crumbs .path{font-size:15px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#crumbs .path button{color:var(--accent);padding:4px 2px}
+#crumbs .path button:last-child{color:var(--text);font-weight:600}
+.card .thumb.folder{background:none;border:0;box-shadow:none;align-items:flex-end;padding:0 4px 6px}
+.fold{position:relative;width:100%;height:72%;border-radius:4px 10px 10px 10px;background:color-mix(in srgb,var(--fc) 78%,black)}
+.fold::before{content:'';position:absolute;left:0;top:-9%;width:44%;height:12%;border-radius:8px 8px 0 0;background:color-mix(in srgb,var(--fc) 78%,black)}
+.fold::after{content:'';position:absolute;left:0;right:0;bottom:0;top:12%;border-radius:8px;background:var(--fc)}
+.fold span{position:absolute;right:10px;bottom:8px;z-index:1;color:#fff;font-size:13px;font-weight:600;text-shadow:0 1px 2px rgba(0,0,0,.25)}
 #notes{max-width:1100px;margin:16px auto 0;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:18px}
 .card{position:relative;display:flex;flex-direction:column;gap:6px;text-align:left}
 .card .thumb{aspect-ratio:3/4;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.06)}
@@ -114,12 +120,13 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-
     <h1>PDFノート</h1>
     <button class="btn primary" id="importBtn">PDFを読み込む</button>
     <button class="btn" id="newBtn">空白ノート</button>
+    <button class="btn" id="newFolderBtn">＋フォルダ</button>
     <button class="btn" id="homeMenu" aria-label="メニュー">⋯</button>
   </div>
   <div id="hint" hidden>
     <b>ホーム画面に追加してください。</b>Safariは、しばらく開かないサイトの保存データを消すことがあります。共有ボタン →「ホーム画面に追加」で、アプリとして使うとデータが消えにくくなります。ときどき「⋯ → バックアップを書き出す」もしておくと安心です。
   </div>
-  <div id="folders"></div>
+  <div id="crumbs" hidden></div>
   <div id="notes"></div>
   <input type="file" id="pdfInput" accept="application/pdf,.pdf" multiple hidden>
   <input type="file" id="restoreInput" hidden>
@@ -178,6 +185,7 @@ const A4 = { w: 595.28, h: 841.89 };
 const LINE_GRAY = '#cfcfcf';
 const MAXPX = 8e6;   // 1枚のキャンバスの最大ピクセル数(iPadのメモリ対策)
 const MAGIC = 'PDFNOTE1';
+const SMOOTH = 0.55;  // 線をならす強さ(1でならさない、小さいほどなめらかだが遅れる)
 
 // ---------- 設定(端末ごと) ----------
 const SET_KEY = 'pdfnote-settings';
@@ -292,13 +300,17 @@ function paperLines(pg, paperKey) {  // PDF書き出し用
   }
   return out;
 }
+// 点と点を Catmull-Rom 曲線でなめらかにつなぐ(全部の点を通る3次ベジェに変換)
 function pathD(p) {
+  const n = p.length / 2;
   let d = `M${p[0]} ${p[1]}`;
-  if (p.length === 4) return d + ` L${p[2]} ${p[3]}`;
-  for (let i = 2; i < p.length - 2; i += 2) {
-    d += ` Q${p[i]} ${p[i + 1]} ${r2((p[i] + p[i + 2]) / 2)} ${r2((p[i + 1] + p[i + 3]) / 2)}`;
+  if (n === 2) return d + ` L${p[2]} ${p[3]}`;
+  const X = i => p[2 * clamp(i, 0, n - 1)], Y = i => p[2 * clamp(i, 0, n - 1) + 1];
+  for (let i = 0; i < n - 1; i++) {
+    d += ` C${r2(X(i) + (X(i + 1) - X(i - 1)) / 6)} ${r2(Y(i) + (Y(i + 1) - Y(i - 1)) / 6)}`
+       + ` ${r2(X(i + 1) - (X(i + 2) - X(i)) / 6)} ${r2(Y(i + 1) - (Y(i + 2) - Y(i)) / 6)} ${X(i + 1)} ${Y(i + 1)}`;
   }
-  return d + ` L${p[p.length - 2]} ${p[p.length - 1]}`;
+  return d;
 }
 const pathCache = new WeakMap();
 function strokePath(s) { let p = pathCache.get(s); if (!p) { p = new Path2D(pathD(s.p)); pathCache.set(s, p); } return p; }
@@ -337,35 +349,58 @@ async function renderPageImage(pg, strokes, paperKey, k, reg) {
 }
 
 // ================= ホーム =================
-let folders = [], notes = [], curFolder = 'all';
+// curFolder: 今開いているフォルダのid(null = ホーム)。フォルダの中にフォルダも作れる
+let folders = [], notes = [], curFolder = null;
+const FOLDER_COLORS = ['#6f8fbf', '#5fa58a', '#d39a4a', '#c76b6b', '#9a7cc0', '#8a8a8a'];
+const folderById = id => (id && folders.find(f => f.id === id)) || null;
+const parentOf = f => folderById(f.parentId) ? f.parentId : null;
+const noteFolder = n => folderById(n.folderId) ? n.folderId : null;
+function folderPath(id) {
+  const out = []; let f;
+  while ((f = folderById(id)) && !out.includes(f)) { out.unshift(f); id = parentOf(f); }
+  return out;
+}
+const folderLabel = f => folderPath(f.id).map(x => x.name).join(' › ');
+function isInside(id, ancestorId) { return folderPath(id).some(f => f.id === ancestorId); }
 
 async function refreshHome() {
-  folders = (await DB.all('folders')).sort((a, b) => a.created - b.created);
+  folders = await DB.all('folders');
   notes = await DB.all('notes');
-  if (curFolder !== 'all' && !folders.some(f => f.id === curFolder)) curFolder = 'all';
-  renderFolders(); renderNotes();
+  if (!folderById(curFolder)) curFolder = null;
+  renderHome();
 }
-function renderFolders() {
-  const box = $('#folders'); box.innerHTML = '';
-  const chip = (name, id) => {
-    const b = el('button', 'chip' + (curFolder === id ? ' on' : ''), name);
-    b.onclick = () => {
-      if (curFolder === id && id !== 'all') folderMenu(folders.find(f => f.id === id));
-      else { curFolder = id; renderFolders(); renderNotes(); }
-    };
-    box.append(b);
-  };
-  chip('すべて', 'all');
-  folders.forEach(f => chip(f.name, f.id));
-  const add = el('button', 'chip', '＋フォルダ'); add.onclick = newFolder; box.append(add);
-}
-function renderNotes() {
+function goFolder(id) { curFolder = id; renderHome(); window.scrollTo(0, 0); }
+function renderHome() {
+  const cr = $('#crumbs'); cr.innerHTML = ''; cr.hidden = !curFolder;
+  if (curFolder) {
+    const back = el('button', 'btn', '‹ 戻る'); back.onclick = () => goFolder(parentOf(folderById(curFolder)));
+    const path = el('div', 'path');
+    const home = el('button', null, 'ホーム'); home.onclick = () => goFolder(null); path.append(home);
+    for (const f of folderPath(curFolder)) {
+      path.append(document.createTextNode(' › '));
+      const b = el('button', null, f.name); b.onclick = () => goFolder(f.id); path.append(b);
+    }
+    cr.append(back, path);
+  }
   const box = $('#notes'); box.innerHTML = '';
-  const list = notes.filter(n => curFolder === 'all' || n.folderId === curFolder).sort((a, b) => b.updated - a.updated);
-  if (!list.length) {
-    box.append(el('div', 'empty', 'ノートがありません。\n「PDFを読み込む」か「空白ノート」から始めましょう。'));
-    box.lastChild.style.whiteSpace = 'pre-line';
+  const subs = folders.filter(f => parentOf(f) === curFolder).sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+  const list = notes.filter(n => noteFolder(n) === curFolder).sort((a, b) => b.updated - a.updated);
+  if (!subs.length && !list.length) {
+    const msg = curFolder ? 'このフォルダは空です。\n「PDFを読み込む」「空白ノート」で、このフォルダにノートを作れます。'
+                          : 'ノートがありません。\n「PDFを読み込む」か「空白ノート」から始めましょう。\n「＋フォルダ」で科目ごとにまとめられます。';
+    const e = el('div', 'empty', msg); e.style.whiteSpace = 'pre-line'; box.append(e);
     return;
+  }
+  for (const f of subs) {
+    const nNotes = notes.filter(n => noteFolder(n) === f.id).length, nSubs = folders.filter(x => parentOf(x) === f.id).length;
+    const card = el('div', 'card');
+    const th = el('button', 'thumb folder');
+    const fold = el('div', 'fold'); fold.style.setProperty('--fc', f.color || FOLDER_COLORS[0]);
+    fold.append(el('span', null, `${nNotes}冊`)); th.append(fold);
+    th.onclick = () => goFolder(f.id);
+    const more = el('button', 'more', '⋯'); more.onclick = () => folderMenu(f);
+    card.append(th, el('div', 't', f.name), el('div', 'm', `ノート${nNotes}冊` + (nSubs ? ` ・ フォルダ${nSubs}` : '')), more);
+    box.append(card);
   }
   for (const n of list) {
     const card = el('div', 'card');
@@ -380,18 +415,20 @@ function renderNotes() {
 function noteMenu(n) {
   sheet(n.title, [
     { label: '開く', fn: () => openNote(n.id) },
-    { label: '名前を変える', fn: async () => { const t = prompt('ノートの名前', n.title); if (t && t.trim()) { n.title = t.trim(); await DB.put('notes', n); renderNotes(); } } },
-    { label: 'フォルダへ移動', fn: () => moveToFolder(n) },
+    { label: '名前を変える', fn: async () => { const t = prompt('ノートの名前', n.title); if (t && t.trim()) { n.title = t.trim(); await DB.put('notes', n); renderHome(); } } },
+    { label: 'フォルダへ移動', fn: () => chooseFolder(`「${n.title}」の移動先`, null, async fid => { n.folderId = fid; await DB.put('notes', n); renderHome(); toast('移動しました'); }) },
     { label: 'PDFとして書き出す', fn: () => exportPDF(n) },
     { label: '削除する', danger: true, fn: () => deleteNote(n) },
   ]);
 }
-function moveToFolder(n) {
-  const items = [{ label: '(フォルダなし)', fn: () => setFolder(n, null) }];
-  folders.forEach(f => items.push({ label: f.name, fn: () => setFolder(n, f.id) }));
-  sheet('移動先のフォルダ', items);
+// 移動先を選ぶ。exclude を渡すと、そのフォルダ自身とその中は選べない
+function chooseFolder(title, exclude, done) {
+  const items = [{ label: 'ホーム(フォルダの外)', fn: () => done(null) }];
+  folders.filter(f => !exclude || !isInside(f.id, exclude))
+    .map(f => [folderLabel(f), f]).sort((a, b) => a[0].localeCompare(b[0], 'ja'))
+    .forEach(([label, f]) => items.push({ label, fn: () => done(f.id) }));
+  sheet(title, items);
 }
-async function setFolder(n, fid) { n.folderId = fid; await DB.put('notes', n); renderNotes(); toast('移動しました'); }
 async function deleteNote(n) {
   if (!confirm(`「${n.title}」を削除しますか？\n書き込みも消え、元に戻せません。`)) return;
   await DB.delMany('ink', n.pages.map(p => p.id));
@@ -402,19 +439,33 @@ async function deleteNote(n) {
   refreshHome(); toast('削除しました');
 }
 async function newFolder() {
-  const name = prompt('フォルダの名前(科目名など)');
+  const where = curFolder ? `「${folderById(curFolder).name}」の中に作ります` : '';
+  const name = prompt(`フォルダの名前(科目名など)${where ? '\n' + where : ''}`);
   if (!name || !name.trim()) return;
-  const f = { id: uid(), name: name.trim(), created: Date.now() };
-  await DB.put('folders', f); curFolder = f.id; refreshHome();
+  const f = { id: uid(), name: name.trim(), parentId: curFolder, color: FOLDER_COLORS[folders.length % FOLDER_COLORS.length], created: Date.now() };
+  await DB.put('folders', f); refreshHome(); toast('フォルダを作りました');
 }
 function folderMenu(f) {
   sheet(f.name, [
-    { label: '名前を変える', fn: async () => { const t = prompt('フォルダの名前', f.name); if (t && t.trim()) { f.name = t.trim(); await DB.put('folders', f); refreshHome(); } } },
-    { label: 'フォルダを削除(中のノートは残ります)', danger: true, fn: async () => {
-      if (!confirm(`フォルダ「${f.name}」を削除しますか？`)) return;
-      const moved = notes.filter(n => n.folderId === f.id).map(n => ({ ...n, folderId: null }));
-      await DB.putMany('notes', moved); await DB.del('folders', f.id);
-      curFolder = 'all'; refreshHome();
+    { label: '開く', fn: () => goFolder(f.id) },
+    { label: '名前を変える', fn: async () => { const t = prompt('フォルダの名前', f.name); if (t && t.trim()) { f.name = t.trim(); await DB.put('folders', f); renderHome(); } } },
+    { label: '色を変える', fn: () => {
+      const row = el('div', 'row');
+      FOLDER_COLORS.forEach(c => {
+        const b = el('button', 'sw'); b.style.background = c; b.style.width = b.style.height = '36px';
+        b.onclick = async () => { f.color = c; await DB.put('folders', f); renderHome(); document.querySelector('.sheet-bg:last-child').remove(); };
+        row.append(b);
+      });
+      sheet('フォルダの色', [], row);
+    } },
+    { label: '別のフォルダへ移動', fn: () => chooseFolder(`「${f.name}」の移動先`, f.id, async pid => { f.parentId = pid; await DB.put('folders', f); renderHome(); toast('移動しました'); }) },
+    { label: 'フォルダを削除(中身は残ります)', danger: true, fn: async () => {
+      if (!confirm(`フォルダ「${f.name}」を削除しますか？\n中のノートやフォルダは、ひとつ外に出ます。`)) return;
+      const up = parentOf(f);
+      await DB.putMany('notes', notes.filter(n => noteFolder(n) === f.id).map(n => ({ ...n, folderId: up })));
+      await DB.putMany('folders', folders.filter(x => parentOf(x) === f.id).map(x => ({ ...x, parentId: up })));
+      await DB.del('folders', f.id);
+      refreshHome();
     } },
   ]);
 }
@@ -437,7 +488,7 @@ async function importPDFs(files) {
       doc.destroy();
       await DB.put('pdfs', { id: pdfId, data: buf });
       const now = Date.now();
-      const note = { id: uid(), title: file.name.replace(/\.pdf$/i, ''), folderId: curFolder === 'all' ? null : curFolder,
+      const note = { id: uid(), title: file.name.replace(/\.pdf$/i, ''), folderId: curFolder,
                      paper: 'ruled-m', pages, created: now, updated: now, thumb: null };
       try { note.thumb = (await renderPageImage(pages[0], [], note.paper, 240 / pages[0].w)).toDataURL('image/jpeg', 0.75); } catch {}
       await DB.put('notes', note);
@@ -459,7 +510,7 @@ async function createBlank(paper) {
   const title = prompt('ノートの名前', `ノート ${d.getMonth() + 1}/${d.getDate()}`);
   if (title === null) return;
   const now = Date.now();
-  const note = { id: uid(), title: title.trim() || 'ノート', folderId: curFolder === 'all' ? null : curFolder, paper,
+  const note = { id: uid(), title: title.trim() || 'ノート', folderId: curFolder, paper,
                  pages: [{ id: uid(), type: 'blank', w: A4.w, h: A4.h }], created: now, updated: now, thumb: null };
   await DB.put('notes', note);
   openNote(note.id);
@@ -481,6 +532,7 @@ function showHelp() {
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
     + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。\n'
     + '・よく使うペンは「＋登録」で保存。長押しで削除。\n'
+    + '・「＋フォルダ」で科目ごとにまとめられます。フォルダの中にフォルダも作れます。ノートの「⋯」→「フォルダへ移動」。\n'
     + '・「ページ一覧」でページの移動・空白ページの追加・並べ替え・削除。\n'
     + '・データはこのiPadの中だけに保存されます。ときどきバックアップを書き出してください。';
   sheet('使い方', [], b);
@@ -960,8 +1012,11 @@ window.addEventListener('pointermove', e => {
   for (const ev of evs) {
     const pt = toPage(ev, st);
     if (act.type === 'draw') {
-      const p = act.stroke.p, dx = pt.x - p[p.length - 2], dy = pt.y - p[p.length - 1];
-      if (dx * dx + dy * dy > 0.09) p.push(pt.x, pt.y);
+      // 手ぶれ・座標の細かいガタつきをならす(前の点に少し引き寄せる)
+      const p = act.stroke.p, sm = act.sm || (act.sm = { x: p[0], y: p[1] });
+      sm.x += (pt.x - sm.x) * SMOOTH; sm.y += (pt.y - sm.y) * SMOOTH; act.raw = pt;
+      const x = r2(sm.x), y = r2(sm.y), dx = x - p[p.length - 2], dy = y - p[p.length - 1];
+      if (dx * dx + dy * dy > 0.09) p.push(x, y);
     } else if (act.type === 'lasso' || act.type === 'crop') {
       const p = act.poly, dx = pt.x - p[p.length - 2], dy = pt.y - p[p.length - 1];
       if (dx * dx + dy * dy > 1) p.push(pt.x, pt.y);
@@ -983,7 +1038,11 @@ function finishAct(e, cancelled) {
   const a = act, id = a.st.pg.id;
   endLive(); act = null;
   if (a.type === 'draw') {
-    if (!cancelled) { const before = inkMap.get(id) || []; commitInk(id, before, [...before, a.stroke]); }
+    if (!cancelled) {
+      const p = a.stroke.p;   // ならした分の遅れを取り戻すため、最後はペン先の位置で終える
+      if (a.raw && Math.hypot(a.raw.x - p[p.length - 2], a.raw.y - p[p.length - 1]) > 0.3) p.push(a.raw.x, a.raw.y);
+      const before = inkMap.get(id) || []; commitInk(id, before, [...before, a.stroke]);
+    }
   } else if (a.type === 'erase') {
     a.cursor.remove();
     if (a.changed) pushUndo(id, a.before, inkMap.get(id));
@@ -1251,6 +1310,7 @@ $('#pdfInput').onchange = e => { const fs = [...e.target.files]; e.target.value 
 $('#restoreInput').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) restoreBackup(f); };
 $('#newBtn').onclick = newBlankNote;
 $('#homeMenu').onclick = homeMenu;
+$('#newFolderBtn').onclick = newFolder;
 $('#backBtn').onclick = closeEditor;
 $('#undoBtn').onclick = undo;
 $('#redoBtn').onclick = redo;
