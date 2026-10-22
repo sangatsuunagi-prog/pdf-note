@@ -1,10 +1,9 @@
 PDFノート やること
 
-【いまの段階】公開(GitHub Pages)
+【いまの段階】iPadでの動作確認
 
-[ ] Git を始める(pdf-note フォルダ)
-[ ] GitHub に置き場所 pdf-note を作って送る
-[ ] GitHub Pages で公開し、URLを確認する
+公開URL: https://sangatsuunagi-prog.github.io/pdf-note/
+
 [ ] iPadのSafariでURLを開き、「ホーム画面に追加」する
 [ ] iPadで確認:Apple Pencilで書ける/手のひらで線が出ない
 [ ] iPadで確認:ピンチで拡大・縮小、2本指タップで元に戻す
@@ -16,3 +15,4 @@ PDFノート やること
 [x] 要件確認(2026-10-22)
 [x] 実装(2026-10-22)
 [x] パソコンでの動作確認(2026-10-22)
+[x] Git を始める・GitHub(pdf-note)に送る・GitHub Pages で公開(2026-10-22)
