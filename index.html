@@ -102,6 +102,7 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 .pal-rec .sw{width:30px;height:30px}
 .sz{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center}
 .sz i{display:block;border-radius:50%;background:var(--text)}
+.sq .sz i{border-radius:2px}
 .sz.on{background:var(--accent-soft);box-shadow:inset 0 0 0 1.5px var(--accent)}
 .al{width:30px;height:24px;border-radius:6px;border:1px solid var(--line)}
 .al.on{box-shadow:0 0 0 2px var(--accent)}
@@ -400,8 +401,11 @@ function drawStroke(ctx, s) {
   if (s.t === 'i') { const im = getImg(s.src); if (im.complete && im.naturalWidth) ctx.drawImage(im, s.x, s.y, s.w, s.h); return; }
   ctx.save();
   ctx.globalAlpha = s.t === 'h' ? s.a : 1;
-  ctx.strokeStyle = ctx.fillStyle = s.c; ctx.lineWidth = s.w; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  if (s.p.length === 2) { ctx.beginPath(); ctx.arc(s.p[0], s.p[1], s.w / 2, 0, Math.PI * 2); ctx.fill(); }
+  ctx.strokeStyle = ctx.fillStyle = s.c; ctx.lineWidth = s.w; ctx.lineJoin = 'round';
+  // 蛍光ペンは端を四角に(マーカーらしく)、ペンは丸
+  ctx.lineCap = s.t === 'h' ? 'square' : 'round';
+  if (s.p.length === 2 && s.t === 'h') ctx.fillRect(s.p[0] - s.w / 2, s.p[1] - s.w / 2, s.w, s.w);
+  else if (s.p.length === 2) { ctx.beginPath(); ctx.arc(s.p[0], s.p[1], s.w / 2, 0, Math.PI * 2); ctx.fill(); }
   else ctx.stroke(strokePath(s));
   ctx.restore();
 }
@@ -788,9 +792,11 @@ function drawStrokesPdf(page, strokes, ox, top) {
     if (s.p.length === 2) {
       const o = { x: ox + s.p[0], y: top - s.p[1], size: s.w / 2, color: col, opacity: hl ? s.a : 1 };
       if (hl) o.blendMode = L.BlendMode.Multiply;
-      page.drawCircle(o); continue;
+      if (hl) { delete o.size; Object.assign(o, { x: o.x - s.w / 2, y: o.y - s.w / 2, width: s.w, height: s.w }); page.drawRectangle(o); }
+      else page.drawCircle(o);
+      continue;
     }
-    const o = { x: ox, y: top, borderColor: col, borderWidth: s.w, borderOpacity: hl ? s.a : 1, borderLineCap: L.LineCapStyle.Round };
+    const o = { x: ox, y: top, borderColor: col, borderWidth: s.w, borderOpacity: hl ? s.a : 1, borderLineCap: hl ? L.LineCapStyle.Projecting : L.LineCapStyle.Round };
     if (hl) o.blendMode = L.BlendMode.Multiply;
     page.drawSvgPath(pathD(s.p), o);
   }
@@ -1173,7 +1179,9 @@ function renderOpts() {
     gc.append(fr);
     o.append(gc);
     const W = t === 'pen' ? PEN_W : HL_W;
-    o.append(sizeGroup(W, cfg, t === 'pen' ? [3, 5, 8, 11, 15] : [6, 9, 12, 15, 19], cfg.c));
+    const sg = sizeGroup(W, cfg, t === 'pen' ? [3, 5, 8, 11, 15] : [6, 9, 12, 15, 19], cfg.c);
+    if (t === 'hl') sg.classList.add('sq');
+    o.append(sg);
     if (t === 'hl') {
       const ga = el('div', 'grp');
       HL_A.forEach((a, i) => {
@@ -1194,7 +1202,7 @@ function renderOpts() {
   set.presets.forEach((p, i) => {
     const b = el('button', 'preset');
     const dot = el('i'); const d = p.t === 'pen' ? 6 + p.s * 2 : 8 + p.s * 2;
-    dot.style.width = dot.style.height = d + 'px'; dot.style.background = p.c; if (p.t === 'hl') dot.style.opacity = 0.35 + HL_A[p.a];
+    dot.style.width = dot.style.height = d + 'px'; dot.style.background = p.c; if (p.t === 'hl') dot.style.opacity = 0.35 + HL_A[p.a], dot.style.borderRadius = '2px';
     b.append(dot, document.createTextNode(p.t === 'pen' ? 'ペン' : '蛍光'));
     longPress(b, () => { set.tool = p.t; Object.assign(set[p.t], { c: p.c, s: p.s }); if (!set[p.t].slots.includes(p.c)) set[p.t].free = p.c; if (p.t === 'hl') set.hl.a = p.a; saveSet(); clearSel(); renderOpts(); },
       () => { if (confirm('この登録を削除しますか？')) { set.presets.splice(i, 1); saveSet(); renderOpts(); } });
