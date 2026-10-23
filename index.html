@@ -381,7 +381,18 @@ function pathD(p) {
   return d;
 }
 const pathCache = new WeakMap();
-function strokePath(s) { let p = pathCache.get(s); if (!p) { p = new Path2D(pathD(s.p)); pathCache.set(s, p); } return p; }
+function strokePath(s) { let p = pathCache.get(s); if (!p) { p = new Path2D(pathD(linePts(s))); pathCache.set(s, p); } return p; }
+// 蛍光ペンの端の四角は、端の線の向きで傾く。ペン先を置いた瞬間の細かいガタつきで向きが乱れて
+// 丸っぽく見えないよう、両端から太さの半分以内の点は飛ばす(全部近ければ1点=正方形)
+function linePts(s) {
+  const p = s.p, n = p.length / 2;
+  if (s.t !== 'h' || n < 3) return p;
+  const rr = (s.w * 0.5) ** 2, far = (i, j) => (p[2 * i] - p[2 * j]) ** 2 + (p[2 * i + 1] - p[2 * j + 1]) ** 2 >= rr;
+  let a = 1; while (a < n - 1 && !far(a, 0)) a++;
+  let b = n - 2; while (b >= a && !far(b, n - 1)) b--;
+  if (!far(n - 1, 0)) return p.slice(0, 2);
+  return [p[0], p[1], ...p.slice(2 * a, 2 * b + 2), p[2 * n - 2], p[2 * n - 1]];
+}
 // 貼り付けた画像 {t:'i', src(画像データ), x, y, w, h}。読み込み済みのものを使い回す
 const imgCache = new Map();
 function getImg(src) {
@@ -404,7 +415,8 @@ function drawStroke(ctx, s) {
   ctx.strokeStyle = ctx.fillStyle = s.c; ctx.lineWidth = s.w; ctx.lineJoin = 'round';
   // 蛍光ペンは端を四角に(マーカーらしく)、ペンは丸
   ctx.lineCap = s.t === 'h' ? 'square' : 'round';
-  if (s.p.length === 2 && s.t === 'h') ctx.fillRect(s.p[0] - s.w / 2, s.p[1] - s.w / 2, s.w, s.w);
+  const lp = linePts(s);
+  if (lp.length === 2 && s.t === 'h') ctx.fillRect(lp[0] - s.w / 2, lp[1] - s.w / 2, s.w, s.w);
   else if (s.p.length === 2) { ctx.beginPath(); ctx.arc(s.p[0], s.p[1], s.w / 2, 0, Math.PI * 2); ctx.fill(); }
   else ctx.stroke(strokePath(s));
   ctx.restore();
@@ -789,7 +801,8 @@ function drawStrokesPdf(page, strokes, ox, top) {
   const order = [...strokes.filter(s => kindOf(s) === 'h'), ...strokes.filter(s => kindOf(s) === 'p')];
   for (const s of order) {
     const col = hexRgb(s.c), hl = s.t === 'h';
-    if (s.p.length === 2) {
+    const lp = linePts(s);
+    if (lp.length === 2) {
       const o = { x: ox + s.p[0], y: top - s.p[1], size: s.w / 2, color: col, opacity: hl ? s.a : 1 };
       if (hl) o.blendMode = L.BlendMode.Multiply;
       if (hl) { delete o.size; Object.assign(o, { x: o.x - s.w / 2, y: o.y - s.w / 2, width: s.w, height: s.w }); page.drawRectangle(o); }
@@ -798,7 +811,7 @@ function drawStrokesPdf(page, strokes, ox, top) {
     }
     const o = { x: ox, y: top, borderColor: col, borderWidth: s.w, borderOpacity: hl ? s.a : 1, borderLineCap: hl ? L.LineCapStyle.Projecting : L.LineCapStyle.Round };
     if (hl) o.blendMode = L.BlendMode.Multiply;
-    page.drawSvgPath(pathD(s.p), o);
+    page.drawSvgPath(pathD(lp), o);
   }
   page.pushOperators(L.popGraphicsState());
 }
