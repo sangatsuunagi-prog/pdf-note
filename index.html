@@ -109,8 +109,11 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 .hinttxt{font-size:13px;color:var(--sub);padding:0 6px}
 .preset{height:30px;padding:0 8px;border-radius:8px;border:1px solid var(--line);display:flex;align-items:center;gap:5px;font-size:12px;background:#fff}
 .preset i{display:block;border-radius:50%}
+/* 道具の列はノートの上に重ねる(道具を替えて列の高さが変わっても、ノートは動かない) */
+#ework{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
+#opts{position:absolute;left:0;right:0;top:0;z-index:6;box-shadow:0 2px 8px rgba(0,0,0,.06)}
 #scroller{flex:1;overflow:auto;position:relative;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y}
-#pages{display:flex;flex-direction:column;align-items:center;gap:16px;padding:14px 12px 60px;min-width:100%;width:max-content}
+#pages{display:flex;flex-direction:column;align-items:center;gap:16px;padding:66px 12px 60px;min-width:100%;width:max-content}
 .page{position:relative;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.18);flex:none;-webkit-touch-callout:none}
 .page canvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
 .page canvas.hl{mix-blend-mode:multiply}
@@ -193,8 +196,10 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
     <button class="ib" id="pagesBtn">ページ一覧</button>
     <button class="ib" id="editorMenu" aria-label="メニュー">⋯</button>
   </div>
-  <div class="ebar" id="opts"></div>
-  <div id="scroller"><div id="pages"></div></div>
+  <div id="ework">
+    <div class="ebar" id="opts"></div>
+    <div id="scroller"><div id="pages"></div></div>
+  </div>
   <div id="pageno"></div>
 </div>
 
@@ -1459,7 +1464,8 @@ function autoScroll(e) {
     autoTimer = null;
     if (!act || act.type !== 'move' || !act.last) return;
     const vb = scroller.getBoundingClientRect(), y = act.last.clientY, edge = 60;
-    const v = y > vb.bottom - edge ? (y - vb.bottom + edge) / 3 : y < vb.top + edge ? -(vb.top + edge - y) / 3 : 0;
+    const top = vb.top + $('#opts').offsetHeight;   // 上は道具の列の下から
+    const v = y > vb.bottom - edge ? (y - vb.bottom + edge) / 3 : y < top + edge ? -(top + edge - y) / 3 : 0;
     if (!v) return;
     const before = scroller.scrollTop; scroller.scrollTop += v;
     if (scroller.scrollTop === before) return;
@@ -1784,7 +1790,7 @@ scroller.addEventListener('scroll', () => {
   requestAnimationFrame(() => { pnQueued = false; updatePageNo(); });
   scheduleDetails();
 }, { passive: true });
-function scrollToPage(i) { const pg = cur.note.pages[i]; const st = pg && pstate.get(pg.id); if (st) scroller.scrollTop = st.el.offsetTop - 12; updatePageNo(); }
+function scrollToPage(i) { const pg = cur.note.pages[i]; const st = pg && pstate.get(pg.id); if (st) scroller.scrollTop = st.el.offsetTop - $('#opts').offsetHeight - 12; updatePageNo(); }
 async function insertBlankAfter(i) {
   const ref = cur.note.pages[i] || A4;
   const pg = { id: uid(), type: 'blank', w: ref.w, h: ref.h };
