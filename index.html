@@ -77,7 +77,16 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 .ib:active{background:var(--accent-soft)}
 .ib:disabled{opacity:.3}
 .ib.on{background:var(--accent);color:#fff}
-#etitle{flex:1;min-width:60px;font-weight:600;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px}
+/* タブ(最大3つ) */
+#tabs{flex:1;min-width:60px;display:flex;align-items:center;gap:4px;overflow:hidden}
+.tab{flex:0 1 auto;min-width:0;max-width:230px;height:36px;display:flex;align-items:center;border-radius:9px;border:1px solid var(--line);background:var(--bg)}
+.tab.on{background:var(--accent-soft);border-color:var(--accent)}
+.tab .tt{min-width:0;padding:0 2px 0 10px;height:100%;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab.on .tt{font-weight:700}
+.tab .x{flex:none;width:30px;height:100%;color:var(--sub);font-size:15px}
+.tabadd{flex:none;width:36px;height:36px;border-radius:9px;font-size:20px;color:var(--sub)}
+#openBar{max-width:1100px;margin:12px auto 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;color:var(--sub)}
+#openBar button{padding:7px 12px;border-radius:9px;background:var(--accent-soft);border:1px solid var(--accent);color:var(--accent);font-weight:600;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .grp{display:flex;align-items:center;gap:3px;padding:0 6px;border-left:1px solid var(--line)}
 .grp:first-child{border-left:0;padding-left:0}
 .sw{width:26px;height:26px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.15)}
@@ -99,6 +108,9 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 .sel-box{position:absolute;border:1.5px dashed var(--accent);background:rgba(61,90,128,.06);pointer-events:none}
 .sel-menu{position:absolute;display:flex;gap:4px;transform:translateY(-100%);padding-bottom:6px;z-index:2}
 .sel-menu button{background:var(--text);color:#fff;border-radius:8px;padding:6px 12px;font-size:14px}
+.sel-menu.paste{transform:translate(-50%,calc(-100% - 22px));padding:0}
+.sel-menu.paste button{padding:10px 18px;font-size:15px;box-shadow:0 3px 10px rgba(0,0,0,.25)}
+.sel-handle{position:absolute;width:22px;height:22px;border-radius:50%;background:#fff;border:2px solid var(--accent);transform:translate(-50%,-50%);pointer-events:none}
 #pageno{position:absolute;right:14px;bottom:calc(env(safe-area-inset-bottom) + 14px);background:rgba(43,42,40,.7);color:#fff;font-size:13px;padding:4px 10px;border-radius:999px;pointer-events:none}
 
 /* ページ一覧 */
@@ -145,6 +157,7 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
     <b>ホーム画面に追加してください。</b>Safariは、しばらく開かないサイトの保存データを消すことがあります。共有ボタン →「ホーム画面に追加」で、アプリとして使うとデータが消えにくくなります。ときどき「⋯ → バックアップを書き出す」もしておくと安心です。
   </div>
   <div id="backupBar" hidden></div>
+  <div id="openBar" hidden></div>
   <div id="crumbs" hidden></div>
   <div id="notes"></div>
   <div id="selBar" hidden>
@@ -160,7 +173,7 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 <div id="editor" hidden>
   <div class="ebar top">
     <button class="ib" id="backBtn">‹ 一覧</button>
-    <div id="etitle"></div>
+    <div id="tabs"></div>
     <button class="ib" id="undoBtn" aria-label="元に戻す">↶ 戻す</button>
     <button class="ib" id="redoBtn" aria-label="やり直す">↷</button>
     <button class="ib" id="addPageBtn">＋ページ</button>
@@ -340,7 +353,23 @@ function pathD(p) {
 }
 const pathCache = new WeakMap();
 function strokePath(s) { let p = pathCache.get(s); if (!p) { p = new Path2D(pathD(s.p)); pathCache.set(s, p); } return p; }
+// 貼り付けた画像 {t:'i', src(画像データ), x, y, w, h}。読み込み済みのものを使い回す
+const imgCache = new Map();
+function getImg(src) {
+  let im = imgCache.get(src);
+  if (!im) {
+    im = new Image(); im.src = src; imgCache.set(src, im);
+    im.decode().then(() => {   // 読み込めたら、その画像があるページを描き直す
+      for (const st of pstate.values()) if (st.r && (inkMap.get(st.pg.id) || []).some(s => s.src === src)) drawInk(st);
+    }, () => {});
+  }
+  return im;
+}
+const loadImgs = strokes => Promise.all(strokes.filter(s => s.t === 'i').map(s => getImg(s.src).decode().catch(() => {})));
+// 書き込みの種類: 'i' 画像 / 'h' 蛍光ペン / 'p' ペン
+const kindOf = s => s.t === 'i' ? 'i' : s.t === 'h' ? 'h' : 'p';
 function drawStroke(ctx, s) {
+  if (s.t === 'i') { const im = getImg(s.src); if (im.complete && im.naturalWidth) ctx.drawImage(im, s.x, s.y, s.w, s.h); return; }
   ctx.save();
   ctx.globalAlpha = s.t === 'h' ? s.a : 1;
   ctx.strokeStyle = ctx.fillStyle = s.c; ctx.lineWidth = s.w; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -348,16 +377,17 @@ function drawStroke(ctx, s) {
   else ctx.stroke(strokePath(s));
   ctx.restore();
 }
-// 書き込みは2枚の画像に分けて描く。
+// 書き込みは3枚の画像に分けて描く(下から順に)。
+// 貼り付けた画像(kind='i'):用紙のすぐ上に普通に重ねる
 // 蛍光ペン(kind='h'):下の文字が黒いまま透けるよう「乗算」で重ねる画像に描く
-// ペン(kind='p'):色がそのまま見えるよう普通に重ねる画像に描く(蛍光ペンより上)
+// ペン(kind='p'):色がそのまま見えるよう普通に重ねる画像に描く(いちばん上)
 // c はページの (x, y) から幅 w(pt)の範囲を表す画像
 function paintLayer(c, strokes, kind, x, y, w) {
   const ctx = c.getContext('2d');
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
   if (!c.width) return;
   const k = c.width / w; ctx.setTransform(k, 0, 0, k, -x * k, -y * k);
-  for (const s of strokes) if ((s.t === 'h') === (kind === 'h')) drawStroke(ctx, s);
+  for (const s of strokes) if (kindOf(s) === kind) drawStroke(ctx, s);
 }
 function sizeCanvas(c, w, h) { if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } }
 function mkCanvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; }
@@ -373,13 +403,16 @@ async function renderPageImage(pg, strokes, paperKey, k, reg) {
   } else {
     ctx.setTransform(k, 0, 0, k, -reg.x * k, -reg.y * k); drawPaper(ctx, pg, paperKey);
   }
+  await loadImgs(strokes);
+  ctx.setTransform(k, 0, 0, k, -reg.x * k, -reg.y * k);
+  for (const s of strokes) if (s.t === 'i') drawStroke(ctx, s);
   const hl = mkCanvas(c.width, c.height);
   paintLayer(hl, strokes, 'h', reg.x, reg.y, reg.w);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(hl, 0, 0); ctx.globalCompositeOperation = 'source-over';
   hl.width = hl.height = 0;
   ctx.setTransform(k, 0, 0, k, -reg.x * k, -reg.y * k);
-  for (const s of strokes) if (s.t !== 'h') drawStroke(ctx, s);
+  for (const s of strokes) if (kindOf(s) === 'p') drawStroke(ctx, s);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   return c;
 }
@@ -489,7 +522,7 @@ function renderBackupBar() {
   bar.append(el('span', null, msg), b); bar.hidden = false;
 }
 function renderHome() {
-  renderBackupBar();
+  renderBackupBar(); renderOpenBar();
   const cr = $('#crumbs'); cr.innerHTML = ''; cr.hidden = !curFolder;
   if (curFolder) {
     const back = el('button', 'btn', '‹ 戻る'); back.onclick = () => goFolder(parentOf(folderById(curFolder)));
@@ -568,6 +601,7 @@ async function removeNotes(ns) {
   const pdfIds = [...new Set(ns.flatMap(n => n.pages).filter(p => p.pdf && !used.has(p.pdf)).map(p => p.pdf))];
   await DB.delMany('pdfs', pdfIds);
   await DB.delMany('notes', [...ids]);
+  dropTabs(ids); pruneDocs();
 }
 async function newFolder() {
   const where = curFolder ? `「${folderById(curFolder).name}」の中に作ります` : '';
@@ -628,7 +662,7 @@ async function importPDFs(files) {
       console.error(e); alert(`「${file.name}」を読み込めませんでした。\n${e.message || e}`);
     }
   }
-  clearDocs(); busy(false); await refreshHome();
+  pruneDocs(); busy(false); await refreshHome();
   if (files.length === 1 && lastId) openNote(lastId);
 }
 
@@ -661,7 +695,8 @@ function showHelp() {
   b.textContent = '・Apple Pencilで書きます。指はスクロール、2本指で拡大・縮小。\n'
     + '・2本指でトントンとタップすると「元に戻す」。\n'
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
-    + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。\n'
+    + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指で長押し→「貼り付け」。貼り付けた画像はPencilでドラッグして移動、右下の丸で大きさ変更、投げ縄で選んで削除。\n'
+    + '・ノートは3つまで同時に開けます。上のタブで切り替え、「＋」でほかのノートを開きます。\n'
     + '・よく使うペンは「＋登録」で保存。長押しで削除。\n'
     + '・「＋フォルダ」で科目ごとにまとめられます。フォルダの中にフォルダも作れます。ノートの「⋯」→「フォルダへ移動」。\n'
     + '・右上の「選択」で、ノートやフォルダをまとめて選んで移動・削除できます。\n'
@@ -695,6 +730,7 @@ async function restoreBackup(file) {
     const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, hl)));
     if (!confirm(`ノート${head.notes.length}冊を復元します。\n同じノートがある場合は、バックアップの内容で上書きされます。`)) return;
     busy('復元しています…');
+    tabs.length = 0; clearDocs();   // 開いているタブは保存済みなので閉じる(古い内容で上書きしないため)
     let off = 12 + hl;
     const pdfs = head.pdfs.map(p => { const data = buf.slice(off, off + p.size); off += p.size; return { id: p.id, data }; });
     await DB.putMany('pdfs', pdfs);
@@ -714,7 +750,7 @@ async function inkOfPage(id) {
 function drawStrokesPdf(page, strokes, ox, top) {
   const L = PDFLib;
   page.pushOperators(L.pushGraphicsState(), L.setLineJoin(L.LineJoinStyle.Round));
-  const order = [...strokes.filter(s => s.t === 'h'), ...strokes.filter(s => s.t !== 'h')];
+  const order = [...strokes.filter(s => kindOf(s) === 'h'), ...strokes.filter(s => kindOf(s) === 'p')];
   for (const s of order) {
     const col = hexRgb(s.c), hl = s.t === 'h';
     if (s.p.length === 2) {
@@ -728,10 +764,18 @@ function drawStrokesPdf(page, strokes, ox, top) {
   }
   page.pushOperators(L.popGraphicsState());
 }
+// 貼り付けた画像(線より下に入れる)。同じ画像は1回だけ埋め込む
+async function drawImagesPdf(out, page, strokes, ox, top, cache) {
+  for (const s of strokes) {
+    if (s.t !== 'i') continue;
+    if (!cache.has(s.src)) cache.set(s.src, await out.embedPng(await (await fetch(s.src)).arrayBuffer()));
+    page.drawImage(cache.get(s.src), { x: ox + s.x, y: top - s.y - s.h, width: s.w, height: s.h });
+  }
+}
 async function exportPDF(n) {
   const L = PDFLib, inEditor = !!cur.note;
   try {
-    const out = await L.PDFDocument.create(), srcs = new Map();
+    const out = await L.PDFDocument.create(), srcs = new Map(), imgs = new Map();
     for (let i = 0; i < n.pages.length; i++) {
       busy(`PDFを作っています… ${i + 1}/${n.pages.length}`);
       const pg = n.pages[i], strokes = await inkOfPage(pg.id);
@@ -741,6 +785,7 @@ async function exportPDF(n) {
           if (!srcs.has(pg.pdf)) srcs.set(pg.pdf, L.PDFDocument.load((await DB.get('pdfs', pg.pdf)).data, { ignoreEncryption: true }));
           const [page] = await out.copyPages(await srcs.get(pg.pdf), [pg.n - 1]);
           out.addPage(page);
+          await drawImagesPdf(out, page, strokes, pj.view[0], pj.view[3], imgs);
           drawStrokesPdf(page, strokes, pj.view[0], pj.view[3]);
         } else {
           // 回転したページは画像にして入れる
@@ -754,6 +799,7 @@ async function exportPDF(n) {
         for (const [x1, y1, x2, y2] of paperLines(pg, n.paper)) {
           page.drawLine({ start: { x: x1, y: pg.h - y1 }, end: { x: x2, y: pg.h - y2 }, thickness: 0.5, color: hexRgb(LINE_GRAY) });
         }
+        await drawImagesPdf(out, page, strokes, 0, pg.h, imgs);
         drawStrokesPdf(page, strokes, 0, pg.h);
       }
     }
@@ -763,12 +809,12 @@ async function exportPDF(n) {
   } catch (e) {
     console.error(e); busy(false); alert('PDFの書き出しに失敗しました: ' + (e.message || e));
   } finally {
-    if (!inEditor) clearDocs();
+    if (!inEditor) pruneDocs();
   }
 }
 
 // ================= エディタ =================
-const cur = { note: null };
+const cur = { note: null, tab: null };
 let inkMap = new Map(), undoStack = [], redoStack = [], zoom = 1;
 const pstate = new Map();   // pageId -> {pg, el, bg, ink, r, visible, task}
 const thumbCache = new Map();
@@ -776,37 +822,108 @@ const dirty = new Set();
 let saveTimer = null, io = null, act = null, sel = null, pinch = null;
 const scroller = $('#scroller'), pagesEl = $('#pages');
 
+// ---------- タブ(ノートを最大3つまで開いておける) ----------
+// 画面に出すのは選んでいるタブだけ。ほかのタブは書き込み・元に戻す履歴・拡大率・スクロール位置を覚えておく
+const MAX_TABS = 3;
+const tabs = [];   // {id, note, inkMap, undo, redo, zoom, sx, sy}
+const tabTitle = t => (notes.find(n => n.id === t.id) || t.note).title;
 async function openNote(id) {
+  const open = tabs.find(t => t.id === id);
+  if (open) return switchTab(open);
+  if (tabs.length >= MAX_TABS) {
+    sheet(`ノートは${MAX_TABS}つまで開けます。どれを閉じますか？`, tabs.map(t => ({ label: `「${tabTitle(t)}」を閉じる`, fn: async () => { await closeTab(t, false); openNote(id); } })));
+    return;
+  }
   busy('開いています…');
   try {
     const note = await DB.get('notes', id);
-    inkMap = new Map();
-    const recs = await Promise.all(note.pages.map(pg => DB.get('ink', pg.id)));
-    note.pages.forEach((pg, i) => inkMap.set(pg.id, recs[i] ? recs[i].strokes : []));
-    cur.note = note; cur.changed = false;
-    undoStack = []; redoStack = []; zoom = 1; thumbCache.clear();
-    $('#home').hidden = true; $('#editor').hidden = false;
-    $('#etitle').textContent = note.title;
-    buildPages(); scroller.scrollTop = 0; scroller.scrollLeft = 0;
-    renderOpts(); updateUndo(); updatePageNo();
+    const ink = new Map(), recs = await Promise.all(note.pages.map(pg => DB.get('ink', pg.id)));
+    note.pages.forEach((pg, i) => ink.set(pg.id, recs[i] ? recs[i].strokes : []));
+    await suspendTab();
+    const t = { id, note, inkMap: ink, undo: [], redo: [], zoom: 1, sx: 0, sy: 0 };
+    tabs.push(t); await activate(t);
   } catch (e) { console.error(e); alert('開けませんでした: ' + e.message); }
   busy(false);
 }
-async function closeEditor() {
+// 今のタブを保存して画面から外す(タブ自体は開いたまま)
+async function suspendTab() {
   const note = cur.note; if (!note) return;
-  busy('保存しています…');
-  clearSel(); await flushInk();
+  cancelAct(); clearSel(); hidePaste(); await flushInk();
   if (cur.changed || !note.thumb) {
     try { const p0 = note.pages[0]; note.thumb = (await renderPageImage(p0, inkMap.get(p0.id) || [], note.paper, 240 / p0.w)).toDataURL('image/jpeg', 0.75); } catch {}
     if (cur.changed) note.updated = Date.now();
     await DB.put('notes', note);
   }
+  Object.assign(cur.tab, { note, inkMap, undo: undoStack, redo: redoStack, zoom, sx: scroller.scrollLeft, sy: scroller.scrollTop });
   io && io.disconnect();
   for (const st of pstate.values()) release(st);
-  pstate.clear(); pagesEl.innerHTML = '';
-  cur.note = null; inkMap = new Map(); clearDocs();
+  pstate.clear(); pagesEl.innerHTML = ''; imgCache.clear();
+  cur.note = cur.tab = null; inkMap = new Map(); undoStack = []; redoStack = [];
+}
+async function activate(t) {
+  // ホームで名前変更・移動されているかもしれないので、ノートの情報は読み直す
+  const note = await DB.get('notes', t.id);
+  if (!note) { tabs.splice(tabs.indexOf(t), 1); return false; }
+  t.note = note;
+  cur.note = note; cur.tab = t; cur.changed = false;
+  inkMap = t.inkMap; undoStack = t.undo; redoStack = t.redo; zoom = t.zoom; thumbCache.clear();
+  $('#home').hidden = true; $('#editor').hidden = false; $('#panel').hidden = true;
+  renderTabs();
+  buildPages(); scroller.scrollLeft = t.sx; scroller.scrollTop = t.sy;
+  renderOpts(); updateUndo(); updatePageNo();
+  return true;
+}
+async function switchTab(t) {
+  if (cur.tab === t) return;
+  busy('開いています…');
+  try { await suspendTab(); if (!await activate(t)) await goHome(); }
+  catch (e) { console.error(e); alert('開けませんでした: ' + e.message); }
+  busy(false);
+}
+// タブを閉じる。showNext=true なら残りのタブを表示(なければホームへ)
+async function closeTab(t, showNext = true) {
+  const wasCur = cur.tab === t;
+  if (wasCur) { busy('保存しています…'); await suspendTab(); busy(false); }
+  tabs.splice(tabs.indexOf(t), 1);
+  pruneDocs();
+  if (!showNext) return;
+  if (wasCur && tabs.length) switchTab(tabs[tabs.length - 1]);
+  else if (wasCur) goHome();
+  else renderTabs();
+}
+async function goHome() {
+  busy('保存しています…');
+  try { await suspendTab(); } catch (e) { console.error(e); }
   $('#panel').hidden = true; $('#editor').hidden = true; $('#home').hidden = false;
   busy(false); refreshHome();
+}
+// どのタブでも使っていないPDFの読み込みを捨てる(メモリ節約)
+function pruneDocs() {
+  const used = new Set(tabs.flatMap(t => t.note.pages.map(p => p.pdf)));
+  for (const [id, p] of docCache) if (!used.has(id)) { p.then(d => d.destroy()).catch(() => {}); docCache.delete(id); }
+}
+// ノートが消されたら、そのタブも閉じる(保存はしない)
+function dropTabs(ids) { for (const t of [...tabs]) if (ids.has(t.id)) tabs.splice(tabs.indexOf(t), 1); }
+function renderTabs() {
+  const box = $('#tabs'); box.innerHTML = '';
+  for (const t of tabs) {
+    const tab = el('div', 'tab' + (t === cur.tab ? ' on' : ''));
+    const tt = el('button', 'tt', t === cur.tab ? cur.note.title : tabTitle(t));
+    tt.onclick = () => t === cur.tab ? editorMenu() : switchTab(t);
+    const x = el('button', 'x', '✕'); x.setAttribute('aria-label', '閉じる'); x.onclick = () => closeTab(t);
+    tab.append(tt, x); box.append(tab);
+  }
+  if (tabs.length < MAX_TABS) {
+    const add = el('button', 'tabadd', '＋'); add.setAttribute('aria-label', 'ほかのノートを開く');
+    add.onclick = async () => { await goHome(); toast('開きたいノートを選ぶと、タブで開きます'); };
+    box.append(add);
+  }
+}
+function renderOpenBar() {
+  const bar = $('#openBar'); bar.innerHTML = ''; bar.hidden = !tabs.length;
+  if (!tabs.length) return;
+  bar.append(el('span', null, '開いているノート:'));
+  for (const t of tabs) { const b = el('button', null, tabTitle(t)); b.onclick = () => switchTab(t); bar.append(b); }
 }
 function saveNote() { cur.changed = true; return DB.put('notes', cur.note); }
 
@@ -818,10 +935,10 @@ function buildPages() {
   io = new IntersectionObserver(onIO, { root: scroller, rootMargin: '60% 0px' });
   for (const pg of cur.note.pages) {
     const e = el('div', 'page'); e.dataset.id = pg.id;
-    const bg = el('canvas', 'bg'), hl = el('canvas', 'hl'), ink = el('canvas', 'ink');
-    for (const c of [bg, hl, ink]) c.width = c.height = 0;
-    e.append(bg, hl, ink); pagesEl.append(e);
-    pstate.set(pg.id, { pg, el: e, bg, hl, ink, r: 0, visible: false, task: null });
+    const bg = el('canvas', 'bg'), im = el('canvas', 'im'), hl = el('canvas', 'hl'), ink = el('canvas', 'ink');
+    for (const c of [bg, im, hl, ink]) c.width = c.height = 0;
+    e.append(bg, im, hl, ink); pagesEl.append(e);
+    pstate.set(pg.id, { pg, el: e, bg, im, hl, ink, r: 0, visible: false, task: null });
     io.observe(e);
   }
   layout();
@@ -846,7 +963,7 @@ function onIO(entries) {
 function release(st) {
   dropDetail(st);
   if (st.task) { st.task.cancel(); st.task = null; }
-  for (const c of [st.bg, st.hl, st.ink]) c.width = c.height = 0;
+  for (const c of [st.bg, st.im, st.hl, st.ink]) c.width = c.height = 0;
   st.r = 0;
 }
 let rendering = false, renderAgain = false;
@@ -898,9 +1015,11 @@ async function renderBg(st, r) {
 function drawInk(st) {
   const w = st.bg.width, h = st.bg.height;
   // 蛍光ペンは太くて輪郭がやわらかいので、半分の細かさにしてメモリを節約する
+  const strokes = inkMap.get(st.pg.id) || [], hasImg = strokes.some(s => s.t === 'i');
   sizeCanvas(st.ink, w, h); sizeCanvas(st.hl, Math.ceil(w / 2), Math.ceil(h / 2));
+  sizeCanvas(st.im, hasImg ? w : 0, hasImg ? h : 0);   // 画像がないページでは使わない
   if (!w) return;
-  const strokes = inkMap.get(st.pg.id) || [];
+  paintLayer(st.im, strokes, 'i', 0, 0, st.pg.w);
   paintLayer(st.hl, strokes, 'h', 0, 0, st.pg.w);
   paintLayer(st.ink, strokes, 'p', 0, 0, st.pg.w);
   drawDetailInk(st);
@@ -917,12 +1036,14 @@ function placeCanvas(c, pg, reg) {
 function dropDetail(st) {
   if (st.dtask) { st.dtask.cancel(); st.dtask = null; }
   const d = st.detail; if (!d) return;
-  for (const c of [d.bg, d.hl, d.ink]) { c.width = c.height = 0; c.remove(); }
+  for (const c of [d.bg, d.im, d.hl, d.ink]) { c.width = c.height = 0; c.remove(); }
   st.detail = null;
 }
 function drawDetailInk(st) {
   const d = st.detail; if (!d) return;
-  const strokes = inkMap.get(st.pg.id) || [];
+  const strokes = inkMap.get(st.pg.id) || [], hasImg = strokes.some(s => s.t === 'i');
+  sizeCanvas(d.im, hasImg ? d.bg.width : 0, hasImg ? d.bg.height : 0);
+  paintLayer(d.im, strokes, 'i', d.x, d.y, d.w);
   paintLayer(d.hl, strokes, 'h', d.x, d.y, d.w);
   paintLayer(d.ink, strokes, 'p', d.x, d.y, d.w);
 }
@@ -958,12 +1079,12 @@ async function updateDetails() {
     }
     if (gen !== detailGen || !st.visible || !pstate.has(st.pg.id)) { bg.width = bg.height = 0; return; }
     dropDetail(st);
-    const hl = mkCanvas(bg.width / 2, bg.height / 2), ink = mkCanvas(bg.width, bg.height);
-    bg.className = 'dbg'; hl.className = 'hl'; ink.className = 'ink';
-    for (const c of [bg, hl, ink]) placeCanvas(c, st.pg, reg);
+    const im = mkCanvas(1, 1), hl = mkCanvas(bg.width / 2, bg.height / 2), ink = mkCanvas(bg.width, bg.height);
+    bg.className = 'dbg'; im.className = 'im'; hl.className = 'hl'; ink.className = 'ink';
+    for (const c of [bg, im, hl, ink]) placeCanvas(c, st.pg, reg);
     // 全体の書き込みの上に詳細の背景をかぶせ、その上に詳細の書き込みを描く
-    st.ink.after(bg, hl, ink);
-    st.detail = { ...reg, r, bg, hl, ink };
+    st.ink.after(bg, im, hl, ink);
+    st.detail = { ...reg, r, bg, im, hl, ink };
     drawDetailInk(st);
   }
 }
@@ -1111,7 +1232,15 @@ pagesEl.addEventListener('pointerdown', e => {
   const st = pstate.get(pe.dataset.id); if (!st) return;
   e.preventDefault();
   const pt = toPage(e, st), t = set.tool, base = { st, id: e.pointerId, pointerType: e.pointerType };
-  if (t === 'pen' || t === 'hl') {
+  hidePaste();
+  // 選んでいるもの(投げ縄・貼り付けた直後)は、右下の丸で大きさを変え、枠の中をドラッグで動かす
+  if (sel && sel.st === st && (nearHandle(pt) || inBox(pt, sel.box))) {
+    const orig = inkMap.get(st.pg.id) || [], idx = orig.map(s => sel.set.has(s));
+    if (nearHandle(pt)) {
+      const ax = sel.box.x, ay = sel.box.y;
+      act = { ...base, type: 'scale', ax, ay, d0: Math.max(4, Math.hypot(pt.x - ax, pt.y - ay)), orig, idx, result: orig };
+    } else act = { ...base, type: 'move', start: pt, orig, idx, result: orig };
+  } else if (t === 'pen' || t === 'hl') {
     clearSel();
     const cfg = set[t];
     const stroke = { t: t === 'pen' ? 'p' : 'h', c: COLORS[cfg.c], w: (t === 'pen' ? PEN_W : HL_W)[cfg.s], p: [pt.x, pt.y] };
@@ -1124,13 +1253,8 @@ pagesEl.addEventListener('pointerdown', e => {
     act.cursor = el('div', 'er-cursor'); st.el.append(act.cursor);
     eraseTo(pt);
   } else if (t === 'lasso') {
-    if (sel && sel.st === st && inBox(pt, sel.box)) {
-      const orig = inkMap.get(st.pg.id) || [];
-      act = { ...base, type: 'move', start: pt, orig, idx: orig.map(s => sel.set.has(s)), result: orig };
-    } else {
-      clearSel();
-      act = { ...base, type: 'lasso', poly: [pt.x, pt.y] }; [act.live, act.liveReg] = makeLive(st, pt);
-    }
+    clearSel();
+    act = { ...base, type: 'lasso', poly: [pt.x, pt.y] }; [act.live, act.liveReg] = makeLive(st, pt);
   } else if (t === 'crop') {
     clearSel();
     act = { ...base, type: 'crop', poly: [pt.x, pt.y] }; [act.live, act.liveReg] = makeLive(st, pt);
@@ -1158,7 +1282,12 @@ window.addEventListener('pointermove', e => {
   }
   if (act.type === 'move') {
     const pt = toPage(e, st), dx = pt.x - act.start.x, dy = pt.y - act.start.y;
-    act.result = act.orig.map((s, i) => act.idx[i] ? { ...s, p: s.p.map((v, j) => r2(v + (j % 2 ? dy : dx))) } : s);
+    act.result = act.orig.map((s, i) => act.idx[i] ? moveItem(s, dx, dy) : s);
+    applyInk(st.pg.id, act.result);
+    sel.set = new Set(act.result.filter((_, i) => act.idx[i])); drawSelBox();
+  } else if (act.type === 'scale') {
+    const pt = toPage(e, st), f = clamp(Math.hypot(pt.x - act.ax, pt.y - act.ay) / act.d0, 0.1, 10);
+    act.result = act.orig.map((s, i) => act.idx[i] ? scaleItem(s, act.ax, act.ay, f) : s);
     applyInk(st.pg.id, act.result);
     sel.set = new Set(act.result.filter((_, i) => act.idx[i])); drawSelBox();
   }
@@ -1180,7 +1309,7 @@ function finishAct(e, cancelled) {
   } else if (a.type === 'erase') {
     a.cursor.remove();
     if (a.changed) pushUndo(id, a.before, inkMap.get(id));
-  } else if (a.type === 'move') {
+  } else if (a.type === 'move' || a.type === 'scale') {
     if (a.result !== a.orig) pushUndo(id, a.orig, a.result);
   } else if (a.type === 'lasso') {
     if (!cancelled) finishLasso(a);
@@ -1203,6 +1332,7 @@ function eraseTo(pt) {
   const strokes = inkMap.get(st.pg.id) || [];
   let changed = false; const out = [];
   for (const s of strokes) {
+    if (s.t === 'i') { out.push(s); continue; }   // 貼り付けた画像は消しゴムでは消さない(投げ縄で削除)
     const RR = R + s.w / 2, p = s.p;
     let hit = false, cutLink = false; const runs = []; let cur = [];
     for (let i = 0; i < p.length; i += 2) {
@@ -1231,6 +1361,7 @@ function finishLasso(a) {
   if (a.poly.length < 6) return;
   const strokes = inkMap.get(a.st.pg.id) || [];
   const chosen = strokes.filter(s => {
+    if (s.t === 'i') return pip(s.x + s.w / 2, s.y + s.h / 2, a.poly);
     let n = 0, inn = 0;
     for (let i = 0; i < s.p.length; i += 2) { n++; if (pip(s.p[i], s.p[i + 1], a.poly)) inn++; }
     return inn / n >= 0.5;
@@ -1243,6 +1374,7 @@ function drawSelBox() {
   if (!sel) return;
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
   for (const s of sel.set) {
+    if (s.t === 'i') { x1 = Math.min(x1, s.x); y1 = Math.min(y1, s.y); x2 = Math.max(x2, s.x + s.w); y2 = Math.max(y2, s.y + s.h); continue; }
     for (let i = 0; i < s.p.length; i += 2) {
       x1 = Math.min(x1, s.p[i] - s.w / 2); x2 = Math.max(x2, s.p[i] + s.w / 2);
       y1 = Math.min(y1, s.p[i + 1] - s.w / 2); y2 = Math.max(y2, s.p[i + 1] + s.w / 2);
@@ -1254,14 +1386,30 @@ function drawSelBox() {
     sel.boxEl = el('div', 'sel-box'); sel.menu = el('div', 'sel-menu');
     const del = el('button', null, '削除');
     del.onclick = () => { const id = sel.st.pg.id, before = inkMap.get(id); commitInk(id, before, before.filter(s => !sel.set.has(s))); clearSel(); };
-    sel.menu.append(del); pe.append(sel.boxEl, sel.menu);
+    sel.handle = el('div', 'sel-handle');
+    sel.menu.append(del); pe.append(sel.boxEl, sel.handle, sel.menu);
   }
-  const b = sel.box, s1 = sel.boxEl.style, s2 = sel.menu.style;
+  const b = sel.box, s1 = sel.boxEl.style, s2 = sel.menu.style, s3 = sel.handle.style;
   s1.left = b.x / pg.w * 100 + '%'; s1.top = b.y / pg.h * 100 + '%'; s1.width = b.w / pg.w * 100 + '%'; s1.height = b.h / pg.h * 100 + '%';
   s2.left = s1.left; s2.top = s1.top;
+  s3.left = (b.x + b.w) / pg.w * 100 + '%'; s3.top = (b.y + b.h) / pg.h * 100 + '%';
+}
+function nearHandle(pt) {
+  if (!sel || !sel.box) return false;
+  const b = sel.box, k = sel.st.el.getBoundingClientRect().width / sel.st.pg.w;
+  return Math.hypot(pt.x - b.x - b.w, pt.y - b.y - b.h) * k < 24;
+}
+function moveItem(s, dx, dy) {
+  if (s.t === 'i') return { ...s, x: r2(s.x + dx), y: r2(s.y + dy) };
+  return { ...s, p: s.p.map((v, j) => r2(v + (j % 2 ? dy : dx))) };
+}
+// (ax, ay) を基準に f 倍する。線は太さも一緒に変える
+function scaleItem(s, ax, ay, f) {
+  if (s.t === 'i') return { ...s, x: r2(ax + (s.x - ax) * f), y: r2(ay + (s.y - ay) * f), w: r2(s.w * f), h: r2(s.h * f) };
+  return { ...s, w: r2(s.w * f), p: s.p.map((v, j) => r2(j % 2 ? ay + (v - ay) * f : ax + (v - ax) * f)) };
 }
 function inBox(pt, b) { return pt.x >= b.x && pt.x <= b.x + b.w && pt.y >= b.y && pt.y <= b.y + b.h; }
-function clearSel() { if (!sel) return; sel.boxEl && sel.boxEl.remove(); sel.menu && sel.menu.remove(); sel = null; }
+function clearSel() { if (!sel) return; for (const e of [sel.boxEl, sel.handle, sel.menu]) e && e.remove(); sel = null; }
 
 // ---------- 切り取り ----------
 async function doCrop(a) {
@@ -1282,23 +1430,89 @@ async function doCrop(a) {
     const blob = await new Promise(r => c.toBlob(r, 'image/png'));
     c.width = c.height = 0;
     busy(false);
-    showCrop(blob);
+    showCrop(blob, reg.w, reg.h);
   } catch (e) { busy(false); console.error(e); alert('切り取りに失敗しました: ' + e.message); }
 }
-function showCrop(blob) {
+function showCrop(blob, w, h) {
   const url = URL.createObjectURL(blob);
   const body = el('div'), img = el('img', 'preview'); img.src = url; body.append(img);
   const row = el('div', 'row');
   const copy = el('button', 'btn primary', 'コピー'), share = el('button', 'btn', '共有・保存');
   copy.onclick = async () => {
-    try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); toast('コピーしました'); }
-    catch (e) { toast('コピーできませんでした。「共有・保存」を使ってください'); }
+    clip = { blob, w, h };   // このアプリ内に貼り付ける用(元の大きさも覚えておく)
+    try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); toast('コピーしました。ページを指で長押しで貼り付け'); }
+    catch (e) { toast('コピーしました。このアプリ内ではページの長押しで貼り付けできます'); }
   };
   share.onclick = () => shareFile(blob, '切り取り.png');
   row.append(copy, share); body.append(row);
+  body.append(el('div', 'body', '貼り付けるときは、ノートのページを指で長押し →「貼り付け」。ほかのアプリにも貼り付けられます。'));
   sheet('切り取り', [], body);
   const bg = document.body.lastChild;
   new MutationObserver((_, ob) => { if (!bg.isConnected) { URL.revokeObjectURL(url); ob.disconnect(); } }).observe(document.body, { childList: true });
+}
+
+// ---------- 貼り付け(ページを指で長押し) ----------
+// 切り取りの「コピー」で clip に覚えておく。なければiPadのクリップボードの画像を使う
+let clip = null, lp = null, pasteMenu = null;
+const LP_MS = 550;
+pagesEl.addEventListener('pointerdown', e => {
+  if (lp) { clearTimeout(lp.timer); lp = null; return; }   // 2本目の指が来たら長押しではない
+  if (e.pointerType !== 'touch' || e.target.closest('.sel-menu')) return;
+  const pe = e.target.closest('.page'); if (!pe) return;
+  const x = e.clientX, y = e.clientY, id = e.pointerId;
+  lp = { id, x, y, timer: setTimeout(() => {
+    lp = null;
+    const st = pstate.get(pe.dataset.id); if (!st || pinch) return;
+    if (act && act.id === id) cancelAct();   // 「指で書く」のときは書きかけの線を取り消す
+    showPaste(st, toPage({ clientX: x, clientY: y }, st));
+  }, LP_MS) };
+}, true);
+window.addEventListener('pointermove', e => {
+  if (lp && e.pointerId === lp.id && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > 10) { clearTimeout(lp.timer); lp = null; }
+});
+const lpEnd = e => { if (lp && e.pointerId === lp.id) { clearTimeout(lp.timer); lp = null; } };
+window.addEventListener('pointerup', lpEnd);
+window.addEventListener('pointercancel', lpEnd);
+pagesEl.addEventListener('contextmenu', e => e.preventDefault());
+
+function showPaste(st, pt) {
+  hidePaste();
+  const m = el('div', 'sel-menu paste'), b = el('button', null, '貼り付け'), shown = Date.now();
+  m.style.left = pt.x / st.pg.w * 100 + '%'; m.style.top = pt.y / st.pg.h * 100 + '%';
+  b.onclick = () => { if (Date.now() - shown < 350) return; hidePaste(); doPaste(st, pt); };
+  m.append(b); st.el.append(m); pasteMenu = m;
+  if (navigator.vibrate) navigator.vibrate(10);
+}
+function hidePaste() { if (pasteMenu) { pasteMenu.remove(); pasteMenu = null; } }
+document.addEventListener('pointerdown', e => { if (pasteMenu && !e.target.closest('.sel-menu')) hidePaste(); }, true);
+
+async function doPaste(st, pt) {
+  let blob = clip && clip.blob, w = clip && clip.w, h = clip && clip.h;
+  if (!blob && navigator.clipboard && navigator.clipboard.read) {
+    try {
+      for (const it of await navigator.clipboard.read()) {
+        const type = it.types.find(t => t.startsWith('image/'));
+        if (type) { blob = await it.getType(type); break; }
+      }
+    } catch {}
+  }
+  if (!blob) { toast('貼り付けるものがありません。切り取りで「コピー」してから使ってください'); return; }
+  try {
+    const bmp = await createImageBitmap(blob);
+    if (!w) { w = bmp.width / 2; h = bmp.height / 2; }   // ほかのアプリの画像は、ほどよい大きさに
+    // 大きすぎる画像は小さくして保存する(データを軽くするため)
+    const px = Math.min(1, 1600 / Math.max(bmp.width, bmp.height)), c = mkCanvas(bmp.width * px, bmp.height * px);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height); bmp.close && bmp.close();
+    const src = c.toDataURL('image/png'); c.width = c.height = 0;
+    const pg = st.pg, f = Math.min(1, pg.w * 0.9 / w, pg.h * 0.9 / h);
+    w = r2(w * f); h = r2(h * f);
+    const item = { t: 'i', src, x: r2(clamp(pt.x - w / 2, 0, pg.w - w)), y: r2(clamp(pt.y - h / 2, 0, pg.h - h)), w, h };
+    await loadImgs([item]);
+    const before = inkMap.get(pg.id) || [];
+    commitInk(pg.id, before, [...before, item]);
+    clearSel(); sel = { st, set: new Set([item]) }; drawSelBox();
+    toast('貼り付けました。Pencilでドラッグして移動、右下の丸で大きさを変えられます');
+  } catch (e) { console.error(e); toast('貼り付けできませんでした'); }
 }
 
 // ---------- 指の操作(ピンチ・2本指タップ・Pencilでのスクロール防止) ----------
@@ -1434,7 +1648,7 @@ function editorMenu() {
       set.finger = !set.finger; saveSet(); scroller.style.touchAction = set.finger ? 'none' : '';
       toast(set.finger ? '指で書けます(スクロールは2本指)' : '指はスクロールに戻りました');
     } },
-    { label: 'ノートの名前を変える', fn: async () => { const t = prompt('ノートの名前', n.title); if (t && t.trim()) { n.title = t.trim(); $('#etitle').textContent = n.title; await saveNote(); } } },
+    { label: 'ノートの名前を変える', fn: async () => { const t = prompt('ノートの名前', n.title); if (t && t.trim()) { n.title = t.trim(); renderTabs(); await saveNote(); } } },
   ]);
 }
 
@@ -1453,7 +1667,7 @@ $('#selAll').onclick = () => {
 };
 $('#selMove').onclick = moveSelected;
 $('#selDel').onclick = deleteSelected;
-$('#backBtn').onclick = closeEditor;
+$('#backBtn').onclick = goHome;
 $('#undoBtn').onclick = undo;
 $('#redoBtn').onclick = redo;
 $('#addPageBtn').onclick = () => insertBlankAfter(currentIndex());
@@ -1461,7 +1675,6 @@ $('#pagesBtn').onclick = () => { $('#panel').hidden = false; renderPanel(); };
 $('#panelClose').onclick = () => $('#panel').hidden = true;
 $('#addLastBtn').onclick = () => insertBlankAfter(cur.note.pages.length - 1);
 $('#editorMenu').onclick = editorMenu;
-$('#etitle').onclick = () => editorMenu();
 document.addEventListener('keydown', e => {
   if (!cur.note || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
   e.preventDefault(); e.shiftKey ? redo() : undo();
