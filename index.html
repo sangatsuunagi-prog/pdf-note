@@ -1114,8 +1114,10 @@ function pushUndo(pageId, before, after) {
   redoStack = []; updateUndo();
 }
 function commitInk(pageId, before, after) { applyInk(pageId, after); pushUndo(pageId, before, after); }
-function undo() { const u = undoStack.pop(); if (!u) return; clearSel(); redoStack.push(u); applyInk(u.pageId, u.before); updateUndo(); }
-function redo() { const u = redoStack.pop(); if (!u) return; clearSel(); undoStack.push(u); applyInk(u.pageId, u.after); updateUndo(); }
+// 1回の操作で複数ページが変わったときは {multi: [{pageId, before, after}, …]}
+const undoParts = u => u.multi || [u];
+function undo() { const u = undoStack.pop(); if (!u) return; clearSel(); redoStack.push(u); for (const m of undoParts(u)) applyInk(m.pageId, m.before); updateUndo(); }
+function redo() { const u = redoStack.pop(); if (!u) return; clearSel(); undoStack.push(u); for (const m of undoParts(u)) applyInk(m.pageId, m.after); updateUndo(); }
 function updateUndo() { $('#undoBtn').disabled = !undoStack.length; $('#redoBtn').disabled = !redoStack.length; }
 document.addEventListener('visibilitychange', () => { if (document.hidden && cur.note) flushInk(); });
 window.addEventListener('pagehide', () => { if (cur.note) flushInk(); });
@@ -1294,10 +1296,13 @@ window.addEventListener('pointermove', e => {
     } else if (act.type === 'erase') eraseTo(pt);
   }
   if (act.type === 'move') {
+    act.touched = act.touched || new Map([[st.pg.id, act.orig]]);   // 元に戻す用に、触ったページの最初の状態
     const pt = toPage(e, st), dx = pt.x - act.start.x, dy = pt.y - act.start.y;
     act.result = act.orig.map((s, i) => act.idx[i] ? moveItem(s, dx, dy) : s);
-    applyInk(st.pg.id, act.result);
-    sel.set = new Set(act.result.filter((_, i) => act.idx[i])); drawSelBox();
+    const to = pageAt(e.clientX, e.clientY);
+    if (to && to !== st) moveToPage(to, e);
+    else { applyInk(st.pg.id, act.result); sel.set = new Set(act.result.filter((_, i) => act.idx[i])); drawSelBox(); }
+    autoScroll(e);
   } else if (act.type === 'scale') {
     const pt = toPage(e, st), f = clamp(Math.hypot(pt.x - act.ax, pt.y - act.ay) / act.d0, 0.1, 10);
     act.result = act.orig.map((s, i) => act.idx[i] ? scaleItem(s, act.ax, act.ay, f) : s);
@@ -1322,6 +1327,11 @@ function finishAct(e, cancelled) {
   } else if (a.type === 'erase') {
     a.cursor.remove();
     if (a.changed) pushUndo(id, a.before, inkMap.get(id));
+  } else if (a.type === 'move' && a.touched && a.touched.size > 1) {
+    // ページをまたいで動かしたときは、両方のページをまとめて1回で元に戻せるようにする
+    undoStack.push({ multi: [...a.touched].map(([pageId, before]) => ({ pageId, before, after: inkMap.get(pageId) || [] })) });
+    if (undoStack.length > 200) undoStack.shift();
+    redoStack = []; updateUndo();
   } else if (a.type === 'move' || a.type === 'scale') {
     if (a.result !== a.orig) pushUndo(id, a.orig, a.result);
   } else if (a.type === 'lasso') {
@@ -1329,6 +1339,46 @@ function finishAct(e, cancelled) {
   } else if (a.type === 'crop') {
     if (!cancelled) doCrop(a);
   }
+}
+// ドラッグ中に指・Pencilが別のページに入ったら、選んでいるものをそのページへ移す
+function pageAt(x, y) {
+  for (const st of pstate.values()) {
+    if (!st.visible) continue;
+    const r = st.el.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return st;
+  }
+  return null;
+}
+// 動かしている途中で画面の上下の端に近づいたら、自動でスクロールする
+let autoTimer = null;
+function autoScroll(e) {
+  act.last = { clientX: e.clientX, clientY: e.clientY, pointerId: e.pointerId };
+  if (autoTimer) return;
+  const step = () => {
+    autoTimer = null;
+    if (!act || act.type !== 'move' || !act.last) return;
+    const vb = scroller.getBoundingClientRect(), y = act.last.clientY, edge = 60;
+    const v = y > vb.bottom - edge ? (y - vb.bottom + edge) / 3 : y < vb.top + edge ? -(vb.top + edge - y) / 3 : 0;
+    if (!v) return;
+    const before = scroller.scrollTop; scroller.scrollTop += v;
+    if (scroller.scrollTop === before) return;
+    // スクロールした分、指の下のページ上の位置が変わるので、同じ位置で動かし直す
+    autoTimer = requestAnimationFrame(step);
+    window.dispatchEvent(new PointerEvent('pointermove', { ...act.last, pointerType: act.pointerType, bubbles: true }));
+  };
+  autoTimer = requestAnimationFrame(step);
+}
+function moveToPage(to, e) {
+  const from = act.st, r1 = from.el.getBoundingClientRect(), r2 = to.el.getBoundingClientRect(), k = r1.width / from.pg.w;
+  const ox = (r1.left - r2.left) / k, oy = (r1.top - r2.top) / k;
+  const moving = act.result.filter((_, i) => act.idx[i]).map(s => moveItem(s, ox, oy));
+  applyInk(from.pg.id, act.result.filter((_, i) => !act.idx[i]));
+  const tb = inkMap.get(to.pg.id) || [];
+  if (!act.touched.has(to.pg.id)) act.touched.set(to.pg.id, tb);
+  const after = [...tb, ...moving];
+  applyInk(to.pg.id, after);
+  Object.assign(act, { st: to, orig: after, result: after, idx: after.map((_, i) => i >= tb.length), start: toPage(e, to) });
+  clearSel(); sel = { st: to, set: new Set(moving) }; drawSelBox();
 }
 function cancelAct() { if (act) finishAct({ pointerId: act.id }, true); }
 
@@ -1647,7 +1697,8 @@ async function deletePage(i) {
   if (!confirm(`${i + 1}ページ目を削除しますか？\n書き込みも消え、元に戻せません。`)) return;
   const [pg] = ps.splice(i, 1);
   inkMap.delete(pg.id); dirty.delete(pg.id); thumbCache.delete(pg.id);
-  undoStack = undoStack.filter(u => u.pageId !== pg.id); redoStack = redoStack.filter(u => u.pageId !== pg.id); updateUndo();
+  const keep = u => !undoParts(u).some(m => m.pageId === pg.id);
+  undoStack = undoStack.filter(keep); redoStack = redoStack.filter(keep); updateUndo();
   await DB.del('ink', pg.id); await saveNote();
   buildPages(); scrollToPage(Math.min(i, ps.length - 1)); renderPanel();
 }
