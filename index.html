@@ -695,7 +695,7 @@ function showHelp() {
   b.textContent = '・Apple Pencilで書きます。指はスクロール、2本指で拡大・縮小。\n'
     + '・2本指でトントンとタップすると「元に戻す」。\n'
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
-    + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像はPencilでドラッグして移動、右下の丸で大きさ変更、投げ縄で選んで削除。\n'
+    + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像は長押しで選ぶと、そのままドラッグで移動、右下の丸で大きさ変更、「削除」で消せます。\n'
     + '・ノートは3つまで同時に開けます。上のタブで切り替え、「＋」でほかのノートを開きます。\n'
     + '・よく使うペンは「＋登録」で保存。長押しで削除。\n'
     + '・「＋フォルダ」で科目ごとにまとめられます。フォルダの中にフォルダも作れます。ノートの「⋯」→「フォルダへ移動」。\n'
@@ -1227,14 +1227,19 @@ function endLive() { if (act && act.live) { act.live.width = act.live.height = 0
 
 pagesEl.addEventListener('pointerdown', e => {
   if (e.target.closest('.sel-menu')) return;
-  if (act || !canDraw(e)) return;
+  if (act || pinch) return;
   const pe = e.target.closest('.page'); if (!pe) return;
   const st = pstate.get(pe.dataset.id); if (!st) return;
-  e.preventDefault();
   const pt = toPage(e, st), t = set.tool, base = { st, id: e.pointerId, pointerType: e.pointerType };
+  if (!canDraw(e)) {
+    // 選んでいるものは指でも動かせる。それ以外を指で触ったら選択をやめる
+    if (!sel || e.pointerType !== 'touch' || e.isPrimary === false) return;
+    if (!selHit(st, pt)) { clearSel(); return; }
+  }
+  e.preventDefault();
   hidePaste();
   // 選んでいるもの(投げ縄・貼り付けた直後)は、右下の丸で大きさを変え、枠の中をドラッグで動かす
-  if (sel && sel.st === st && (nearHandle(pt) || inBox(pt, sel.box))) {
+  if (selHit(st, pt)) {
     const orig = inkMap.get(st.pg.id) || [], idx = orig.map(s => sel.set.has(s));
     if (nearHandle(pt)) {
       const ax = sel.box.x, ay = sel.box.y;
@@ -1394,6 +1399,7 @@ function drawSelBox() {
   s2.left = s1.left; s2.top = s1.top;
   s3.left = (b.x + b.w) / pg.w * 100 + '%'; s3.top = (b.y + b.h) / pg.h * 100 + '%';
 }
+const selHit = (st, pt) => !!sel && sel.st === st && (nearHandle(pt) || inBox(pt, sel.box));
 function nearHandle(pt) {
   if (!sel || !sel.box) return false;
   const b = sel.box, k = sel.st.el.getBoundingClientRect().width / sel.st.pg.w;
@@ -1470,8 +1476,13 @@ pagesEl.addEventListener('pointerdown', e => {
     lp = null;
     const st = pstate.get(pe.dataset.id); if (!st || pinch) return;
     if (!pen && Date.now() - lastPen < 1000) return;   // Pencilで書いている間の手のひらは無視
-    if (act && act.id === id) cancelAct();   // Pencil(や「指で書く」)のときは書きかけの線を取り消す
-    showPaste(st, toPage({ clientX: x, clientY: y }, st));
+    if (act && act.id === id) {
+      if (act.type === 'move' || act.type === 'scale') return;   // 選んだものを押さえているだけ
+      cancelAct();   // Pencil(や「指で書く」)のときは書きかけの線を取り消す
+    }
+    const pt = toPage({ clientX: x, clientY: y }, st), img = imageAt(st, pt);
+    if (img) pickUp(st, img, pt, id, e.pointerType);
+    else showPaste(st, pt);
   }, LP_MS) };
 }, true);
 window.addEventListener('pointermove', e => {
@@ -1490,6 +1501,21 @@ function showPaste(st, pt) {
   b.onclick = () => { if (Date.now() - shown < 350) return; hidePaste(); doPaste(st, pt); };
   m.append(b); st.el.append(m); pasteMenu = m;
   if (navigator.vibrate) navigator.vibrate(10);
+}
+// 貼り付けた画像を長押しすると選んで、そのまま指(Pencil)を離さずに動かせる
+function imageAt(st, pt) {
+  const a = inkMap.get(st.pg.id) || [];
+  for (let i = a.length - 1; i >= 0; i--) { const s = a[i]; if (s.t === 'i' && inBox(pt, s)) return s; }
+  return null;
+}
+function pickUp(st, img, pt, id, pointerType) {
+  clearSel(); hidePaste();
+  sel = { st, set: new Set([img]) }; drawSelBox();
+  const orig = inkMap.get(st.pg.id) || [];
+  act = { st, id, pointerType, type: 'move', start: pt, orig, idx: orig.map(s => s === img), result: orig };
+  try { st.el.setPointerCapture(id); } catch {}
+  if (navigator.vibrate) navigator.vibrate(10);
+  toast('画像を選びました。そのままドラッグで移動、右下の丸で大きさ変更');
 }
 function hidePaste() { if (pasteMenu) { pasteMenu.remove(); pasteMenu = null; } }
 document.addEventListener('pointerdown', e => { if (pasteMenu && !e.target.closest('.sel-menu')) hidePaste(); }, true);
@@ -1519,7 +1545,7 @@ async function doPaste(st, pt) {
     const before = inkMap.get(pg.id) || [];
     commitInk(pg.id, before, [...before, item]);
     clearSel(); sel = { st, set: new Set([item]) }; drawSelBox();
-    toast('貼り付けました。Pencilでドラッグして移動、右下の丸で大きさを変えられます');
+    toast('貼り付けました。ドラッグで移動、右下の丸で大きさ変更。あとから長押しで選び直せます');
   } catch (e) { console.error(e); toast('貼り付けできませんでした'); }
 }
 
@@ -1528,6 +1554,11 @@ const isStylus = t => t.touchType === 'stylus';
 scroller.addEventListener('touchstart', e => {
   if ([...e.changedTouches].some(isStylus)) { if (!e.target.closest('.sel-menu')) e.preventDefault(); return; }
   const ts = [...e.touches].filter(t => !isStylus(t));
+  // 選んでいるものを指で触ったら、スクロールせずに動かす
+  if (ts.length === 1 && sel && !set.finger && !e.target.closest('.sel-menu')) {
+    const st = sel.st, pe = e.target.closest('.page');
+    if (pe && pe === st.el && selHit(st, toPage(ts[0], st))) e.preventDefault();
+  }
   if (ts.length === 2 && !pinch) {
     if (act && act.pointerType === 'touch') cancelAct();
     startPinch(ts); e.preventDefault();
@@ -1535,6 +1566,7 @@ scroller.addEventListener('touchstart', e => {
 }, { passive: false });
 scroller.addEventListener('touchmove', e => {
   if ([...e.changedTouches].some(isStylus)) { e.preventDefault(); return; }
+  if (act && act.pointerType === 'touch') { e.preventDefault(); return; }   // 指で動かしている間はスクロールしない
   if (pinch) { e.preventDefault(); const ts = [...e.touches].filter(t => !isStylus(t)); if (ts.length >= 2) movePinch(ts); }
 }, { passive: false });
 const touchEnd = e => { if (pinch && [...e.touches].filter(t => !isStylus(t)).length < 2) endPinch(); };
