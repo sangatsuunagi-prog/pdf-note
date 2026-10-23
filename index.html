@@ -110,6 +110,9 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 .sel-menu button{background:var(--text);color:#fff;border-radius:8px;padding:6px 12px;font-size:14px}
 .sel-menu.paste{transform:translate(-50%,calc(-100% - 22px));padding:0}
 .sel-menu.paste button{padding:10px 18px;font-size:15px;box-shadow:0 3px 10px rgba(0,0,0,.25)}
+.guide{position:absolute;pointer-events:none;z-index:1}
+.guide.v{top:0;bottom:0;left:50%;border-left:1.5px dashed #e0408a}
+.guide.h{left:0;right:0;top:50%;border-top:1.5px dashed #e0408a}
 .sel-handle{position:absolute;width:22px;height:22px;border-radius:50%;background:#fff;border:2px solid var(--accent);transform:translate(-50%,-50%);pointer-events:none}
 #pageno{position:absolute;right:14px;bottom:calc(env(safe-area-inset-bottom) + 14px);background:rgba(43,42,40,.7);color:#fff;font-size:13px;padding:4px 10px;border-radius:999px;pointer-events:none}
 
@@ -703,7 +706,7 @@ function showHelp() {
   b.textContent = '・Apple Pencilで書きます。指はスクロール、2本指で拡大・縮小。\n'
     + '・2本指でトントンとタップすると「元に戻す」。\n'
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
-    + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像は長押しで選ぶと、そのままドラッグで移動、右下の丸で大きさ変更、「削除」で消せます。\n'
+    + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像は長押しで選ぶと、そのままドラッグで移動、右下の丸で大きさ変更、「削除」で消せます。ページの真ん中に近づくと点線のガイドが出て、ぴったり合います。\n'
     + '・ノートは3つまで同時に開けます。上のタブで切り替え、「＋」でほかのノートを開きます。\n'
     + '・よく使うペンは「＋登録」で保存。長押しで削除。\n'
     + '・「＋フォルダ」で科目ごとにまとめられます。フォルダの中にフォルダも作れます。ノートの「⋯」→「フォルダへ移動」。\n'
@@ -1297,7 +1300,7 @@ window.addEventListener('pointermove', e => {
   }
   if (act.type === 'move') {
     act.touched = act.touched || new Map([[st.pg.id, act.orig]]);   // 元に戻す用に、触ったページの最初の状態
-    const pt = toPage(e, st), dx = pt.x - act.start.x, dy = pt.y - act.start.y;
+    const pt = toPage(e, st), [dx, dy] = snapCenter(st, pt.x - act.start.x, pt.y - act.start.y);
     act.result = act.orig.map((s, i) => act.idx[i] ? moveItem(s, dx, dy) : s);
     const to = pageAt(e.clientX, e.clientY);
     if (to && to !== st) moveToPage(to, e);
@@ -1327,7 +1330,9 @@ function finishAct(e, cancelled) {
   } else if (a.type === 'erase') {
     a.cursor.remove();
     if (a.changed) pushUndo(id, a.before, inkMap.get(id));
-  } else if (a.type === 'move' && a.touched && a.touched.size > 1) {
+  }
+  if (a.type === 'move') hideGuides();
+  if (a.type === 'move' && a.touched && a.touched.size > 1) {
     // ページをまたいで動かしたときは、両方のページをまとめて1回で元に戻せるようにする
     undoStack.push({ multi: [...a.touched].map(([pageId, before]) => ({ pageId, before, after: inkMap.get(pageId) || [] })) });
     if (undoStack.length > 200) undoStack.shift();
@@ -1340,6 +1345,28 @@ function finishAct(e, cancelled) {
     if (!cancelled) doCrop(a);
   }
 }
+// 動かしているものの真ん中がページの真ん中に近づいたら、点線のガイドを出してぴったり合わせる
+const SNAP_PX = 10;
+let guides = null;
+function snapCenter(st, dx, dy) {
+  const b = act.box0 || (act.box0 = itemsBox(act.orig.filter((_, i) => act.idx[i])));
+  const k = st.el.getBoundingClientRect().width / st.pg.w;
+  const ox = st.pg.w / 2 - ((b.x1 + b.x2) / 2 + dx), oy = st.pg.h / 2 - ((b.y1 + b.y2) / 2 + dy);
+  const sx = Math.abs(ox) * k < SNAP_PX, sy = Math.abs(oy) * k < SNAP_PX;
+  if (sx) dx += ox;
+  if (sy) dy += oy;
+  showGuides(st, sx, sy);
+  return [dx, dy];
+}
+function showGuides(st, v, h) {
+  if (!guides || guides.st !== st) {
+    hideGuides();
+    guides = { st, v: el('div', 'guide v'), h: el('div', 'guide h') };
+    st.el.append(guides.v, guides.h);
+  }
+  guides.v.hidden = !v; guides.h.hidden = !h;
+}
+function hideGuides() { if (guides) { guides.v.remove(); guides.h.remove(); guides = null; } }
 // ドラッグ中に指・Pencilが別のページに入ったら、選んでいるものをそのページへ移す
 function pageAt(x, y) {
   for (const st of pstate.values()) {
@@ -1377,7 +1404,8 @@ function moveToPage(to, e) {
   if (!act.touched.has(to.pg.id)) act.touched.set(to.pg.id, tb);
   const after = [...tb, ...moving];
   applyInk(to.pg.id, after);
-  Object.assign(act, { st: to, orig: after, result: after, idx: after.map((_, i) => i >= tb.length), start: toPage(e, to) });
+  hideGuides();
+  Object.assign(act, { box0: null, st: to, orig: after, result: after, idx: after.map((_, i) => i >= tb.length), start: toPage(e, to) });
   clearSel(); sel = { st: to, set: new Set(moving) }; drawSelBox();
 }
 function cancelAct() { if (act) finishAct({ pointerId: act.id }, true); }
@@ -1433,16 +1461,21 @@ function finishLasso(a) {
   sel = { st: a.st, set: new Set(chosen) };
   drawSelBox();
 }
-function drawSelBox() {
-  if (!sel) return;
+// 線・画像を囲む四角(pt)
+function itemsBox(items) {
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
-  for (const s of sel.set) {
+  for (const s of items) {
     if (s.t === 'i') { x1 = Math.min(x1, s.x); y1 = Math.min(y1, s.y); x2 = Math.max(x2, s.x + s.w); y2 = Math.max(y2, s.y + s.h); continue; }
     for (let i = 0; i < s.p.length; i += 2) {
       x1 = Math.min(x1, s.p[i] - s.w / 2); x2 = Math.max(x2, s.p[i] + s.w / 2);
       y1 = Math.min(y1, s.p[i + 1] - s.w / 2); y2 = Math.max(y2, s.p[i + 1] + s.w / 2);
     }
   }
+  return { x1, y1, x2, y2 };
+}
+function drawSelBox() {
+  if (!sel) return;
+  const { x1, y1, x2, y2 } = itemsBox(sel.set);
   const pad = 4; sel.box = { x: x1 - pad, y: y1 - pad, w: x2 - x1 + pad * 2, h: y2 - y1 + pad * 2 };
   const { pg, el: pe } = sel.st;
   if (!sel.boxEl) {
