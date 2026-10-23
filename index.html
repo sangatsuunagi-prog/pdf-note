@@ -695,7 +695,7 @@ function showHelp() {
   b.textContent = '・Apple Pencilで書きます。指はスクロール、2本指で拡大・縮小。\n'
     + '・2本指でトントンとタップすると「元に戻す」。\n'
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
-    + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指で長押し→「貼り付け」。貼り付けた画像はPencilでドラッグして移動、右下の丸で大きさ変更、投げ縄で選んで削除。\n'
+    + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像はPencilでドラッグして移動、右下の丸で大きさ変更、投げ縄で選んで削除。\n'
     + '・ノートは3つまで同時に開けます。上のタブで切り替え、「＋」でほかのノートを開きます。\n'
     + '・よく使うペンは「＋登録」で保存。長押しで削除。\n'
     + '・「＋フォルダ」で科目ごとにまとめられます。フォルダの中にフォルダも作れます。ノートの「⋯」→「フォルダへ移動」。\n'
@@ -1440,34 +1440,42 @@ function showCrop(blob, w, h) {
   const copy = el('button', 'btn primary', 'コピー'), share = el('button', 'btn', '共有・保存');
   copy.onclick = async () => {
     clip = { blob, w, h };   // このアプリ内に貼り付ける用(元の大きさも覚えておく)
-    try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); toast('コピーしました。ページを指で長押しで貼り付け'); }
+    try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); toast('コピーしました。ページを長押しで貼り付け'); }
     catch (e) { toast('コピーしました。このアプリ内ではページの長押しで貼り付けできます'); }
   };
   share.onclick = () => shareFile(blob, '切り取り.png');
   row.append(copy, share); body.append(row);
-  body.append(el('div', 'body', '貼り付けるときは、ノートのページを指で長押し →「貼り付け」。ほかのアプリにも貼り付けられます。'));
+  body.append(el('div', 'body', '貼り付けるときは、ノートのページを指かPencilで長押し →「貼り付け」。ほかのアプリにも貼り付けられます。'));
   sheet('切り取り', [], body);
   const bg = document.body.lastChild;
   new MutationObserver((_, ob) => { if (!bg.isConnected) { URL.revokeObjectURL(url); ob.disconnect(); } }).observe(document.body, { childList: true });
 }
 
-// ---------- 貼り付け(ページを指で長押し) ----------
+// ---------- 貼り付け(ページを指かPencilで長押し) ----------
 // 切り取りの「コピー」で clip に覚えておく。なければiPadのクリップボードの画像を使う
-let clip = null, lp = null, pasteMenu = null;
+let clip = null, lp = null, pasteMenu = null, lastPen = 0;
 const LP_MS = 550;
 pagesEl.addEventListener('pointerdown', e => {
-  if (lp) { clearTimeout(lp.timer); lp = null; return; }   // 2本目の指が来たら長押しではない
-  if (e.pointerType !== 'touch' || e.target.closest('.sel-menu')) return;
+  const pen = e.pointerType === 'pen';
+  if (pen) lastPen = Date.now();
+  if (lp) {
+    clearTimeout(lp.timer); lp = null;
+    if (!pen) return;   // 2本目の指が来たら長押しではない(Pencilなら手のひらの長押しを取り消してPencilを見る)
+  }
+  if ((e.pointerType !== 'touch' && !pen) || e.target.closest('.sel-menu')) return;
+  if (!pen && e.width > 45) return;   // 大きな接触は手のひらとみなす
   const pe = e.target.closest('.page'); if (!pe) return;
   const x = e.clientX, y = e.clientY, id = e.pointerId;
   lp = { id, x, y, timer: setTimeout(() => {
     lp = null;
     const st = pstate.get(pe.dataset.id); if (!st || pinch) return;
-    if (act && act.id === id) cancelAct();   // 「指で書く」のときは書きかけの線を取り消す
+    if (!pen && Date.now() - lastPen < 1000) return;   // Pencilで書いている間の手のひらは無視
+    if (act && act.id === id) cancelAct();   // Pencil(や「指で書く」)のときは書きかけの線を取り消す
     showPaste(st, toPage({ clientX: x, clientY: y }, st));
   }, LP_MS) };
 }, true);
 window.addEventListener('pointermove', e => {
+  if (e.pointerType === 'pen') lastPen = Date.now();
   if (lp && e.pointerId === lp.id && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > 10) { clearTimeout(lp.timer); lp = null; }
 });
 const lpEnd = e => { if (lp && e.pointerId === lp.id) { clearTimeout(lp.timer); lp = null; } };
