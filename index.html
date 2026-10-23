@@ -485,12 +485,15 @@ function selItems() {
   return { ns: notes.filter(n => ids('n:').includes(n.id)), fs: folders.filter(f => ids('f:').includes(f.id)) };
 }
 function countLabel(ns, fs) { return [fs.length && `フォルダ${fs.length}個`, ns.length && `ノート${ns.length}冊`].filter(Boolean).join('と'); }
+// 名前順(数字は大きさで比べる: 第2回 < 第10回)
+const byName = (a, b) => (a || '').localeCompare(b || '', 'ja', { numeric: true });
+
 function moveSelected() {
   const { ns, fs } = selItems();
   if (!ns.length && !fs.length) return;
   const items = [{ label: 'ホーム(フォルダの外)', fn: () => done(null) }];
   folders.filter(f => !fs.some(x => isInside(f.id, x.id)))
-    .map(f => [folderLabel(f), f]).sort((a, b) => a[0].localeCompare(b[0], 'ja'))
+    .map(f => [folderLabel(f), f]).sort((a, b) => byName(a[0], b[0]))
     .forEach(([label, f]) => items.push({ label, fn: () => done(f.id) }));
   sheet(`${countLabel(ns, fs)}の移動先`, items);
   async function done(fid) {
@@ -546,8 +549,8 @@ function renderHome() {
     cr.append(back, path);
   }
   const box = $('#notes'); box.innerHTML = '';
-  const subs = folders.filter(f => parentOf(f) === curFolder).sort((a, b) => a.name.localeCompare(b.name, 'ja'));
-  const list = notes.filter(n => noteFolder(n) === curFolder).sort((a, b) => b.updated - a.updated);
+  const subs = folders.filter(f => parentOf(f) === curFolder).sort((a, b) => byName(a.name, b.name));
+  const list = notes.filter(n => noteFolder(n) === curFolder).sort((a, b) => byName(a.title, b.title) || b.updated - a.updated);
   if (!subs.length && !list.length) {
     const msg = curFolder ? 'このフォルダは空です。\n「PDFを読み込む」「空白ノート」で、このフォルダにノートを作れます。'
                           : 'ノートがありません。\n「PDFを読み込む」か「空白ノート」から始めましょう。\n「＋フォルダ」で科目ごとにまとめられます。';
@@ -595,7 +598,7 @@ function noteMenu(n) {
 function chooseFolder(title, exclude, done) {
   const items = [{ label: 'ホーム(フォルダの外)', fn: () => done(null) }];
   folders.filter(f => !exclude || !isInside(f.id, exclude))
-    .map(f => [folderLabel(f), f]).sort((a, b) => a[0].localeCompare(b[0], 'ja'))
+    .map(f => [folderLabel(f), f]).sort((a, b) => byName(a[0], b[0]))
     .forEach(([label, f]) => items.push({ label, fn: () => done(f.id) }));
   sheet(title, items);
 }
