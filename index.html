@@ -107,7 +107,7 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 .al{width:30px;height:24px;border-radius:6px;border:1px solid var(--line)}
 .al.on{box-shadow:0 0 0 2px var(--accent)}
 .hinttxt{font-size:13px;color:var(--sub);padding:0 6px}
-.preset{height:30px;padding:0 8px;border-radius:8px;border:1px solid var(--line);display:flex;align-items:center;gap:5px;font-size:12px;background:#fff}
+.preset{-webkit-touch-callout:none;height:30px;padding:0 8px;border-radius:8px;border:1px solid var(--line);display:flex;align-items:center;gap:5px;font-size:12px;background:#fff}
 .preset i{display:block;border-radius:50%}
 /* 道具の列はノートの上に重ねる(道具を替えて列の高さが変わっても、ノートは動かない) */
 #ework{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
@@ -1225,12 +1225,15 @@ function renderOpts() {
     dot.style.width = dot.style.height = d + 'px'; dot.style.background = p.c; if (p.t === 'hl') dot.style.opacity = 0.35 + HL_A[p.a], dot.style.borderRadius = '2px';
     b.append(dot, document.createTextNode(p.t === 'pen' ? 'ペン' : '蛍光'));
     longPress(b, () => { set.tool = p.t; Object.assign(set[p.t], { c: p.c, s: p.s }); if (!set[p.t].slots.includes(p.c)) set[p.t].free = p.c; if (p.t === 'hl') set.hl.a = p.a; saveSet(); clearSel(); renderOpts(); },
-      () => { if (confirm('この登録を削除しますか？')) { set.presets.splice(i, 1); saveSet(); renderOpts(); } });
+      // 長押しで削除メニュー(確認ダイアログはiPadで長押し中だと出ないことがあるので、下から出るメニューにする)
+      () => sheet(`登録した${p.t === 'pen' ? 'ペン' : '蛍光ペン'}`, [
+        { label: 'この登録を削除する', danger: true, fn: () => { set.presets.splice(i, 1); saveSet(); renderOpts(); toast('登録を削除しました'); } },
+      ]));
     gp.append(b);
   });
   if ((t === 'pen' || t === 'hl') && set.presets.length < 8) {
     const add = el('button', 'ib', '＋登録');
-    add.onclick = () => { const c = set[t]; set.presets.push({ t, c: c.c, s: c.s, a: c.a || 0 }); saveSet(); renderOpts(); toast('よく使うペンに登録しました'); };
+    add.onclick = () => { const c = set[t]; set.presets.push({ t, c: c.c, s: c.s, a: c.a || 0 }); saveSet(); renderOpts(); toast('よく使うペンに登録しました(長押しで削除できます)'); };
     gp.append(add);
   }
   if (gp.childNodes.length) o.append(gp);
@@ -1273,9 +1276,19 @@ function palette(title, curColor, pick) {
   }
   const close = sheet(title, [], body);
 }
+// 長押しで開いたメニューが、指を離したときのクリックですぐ閉じないよう、離した直後のクリックだけ無視する
+function swallowClick() {
+  const up = () => {
+    document.removeEventListener('pointerup', up, true);
+    const f = e => { document.removeEventListener('click', f, true); e.stopPropagation(); e.preventDefault(); };
+    document.addEventListener('click', f, true);
+    setTimeout(() => document.removeEventListener('click', f, true), 250);
+  };
+  document.addEventListener('pointerup', up, true);
+}
 function longPress(b, tap, hold) {
   let timer = null, held = false;
-  b.addEventListener('pointerdown', () => { held = false; timer = setTimeout(() => { held = true; hold(); }, 600); });
+  b.addEventListener('pointerdown', () => { held = false; timer = setTimeout(() => { held = true; swallowClick(); hold(); }, 600); });
   const stop = () => clearTimeout(timer);
   b.addEventListener('pointerup', stop); b.addEventListener('pointerleave', stop); b.addEventListener('pointercancel', stop);
   b.addEventListener('click', () => { if (!held) tap(); });
