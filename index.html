@@ -245,7 +245,7 @@ const SMOOTH = 0.55;  // 線をならす強さ(1でならさない、小さい�
 
 // ---------- 設定(端末ごと) ----------
 const SET_KEY = 'pdfnote-settings';
-const set = Object.assign({ tool: 'pen', pen: { c: 0, s: 1 }, hl: { c: 5, s: 2, a: 2 }, er: { s: 2 }, presets: [], finger: false, recent: [] }, loadSet());
+const set = Object.assign({ tool: 'pen', pen: { c: 0, s: 1 }, hl: { c: 5, s: 2, a: 2 }, er: { s: 2 }, presets: [], finger: false, tapUndo: false, recent: [] }, loadSet());
 // 色は昔は COLORS の番号、いまは '#rrggbb'。ペンごとに4色のスロット＋自由な色
 const SLOTS = { pen: ['#1a1a1a', '#e53935', '#1e5bd8', '#2e7d32'], hl: ['#ffd600', '#ec407a', '#29b6f6', '#aeea00'] };
 const toHex = c => typeof c === 'number' ? COLORS[c] || COLORS[0] : c;
@@ -745,7 +745,7 @@ function showHelp() {
   const b = el('div', 'body');
   b.style.whiteSpace = 'pre-line';
   b.textContent = '・Apple Pencilで書きます。指はスクロール、2本指で拡大・縮小。\n'
-    + '・2本指でトントンとタップすると「元に戻す」(Pencilで書いた直後1秒間は、手のひらと区別するため効きません)。\n'
+    + '・元に戻すは上の「↶ 戻す」ボタン。ノート画面の「⋯」メニューで「2本指タップで元に戻す」をオンにすると、2本指でトントンとタップしても戻せます(手のひらで誤って戻らないよう、最初はオフ)。\n'
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
     + '・色：よく使う4色から選べます。虹色の丸を押すとパレットが開いて好きな色を選べます。4色の丸を長押しすると、その丸の色を入れ替えられます。\n'
     + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像は長押しで選ぶと、そのままドラッグで移動、右下の丸で大きさ変更、「削除」で消せます。ページの真ん中に近づくと点線のガイドが出て、ぴったり合います。\n'
@@ -1767,9 +1767,9 @@ function movePinch(ts) {
 function endPinch() {
   const p = pinch; pinch = null;
   pagesEl.style.transform = '';
-  // 2本指タップで元に戻す。Pencilを使った直後の手のひらは2本指タップとみなさない
+  // 2本指タップで元に戻す(メニューでオンにしたときだけ)。Pencilを使った直後の手のひらは2本指タップとみなさない
   if (Date.now() - p.t0 < 300 && p.moved < 12) {
-    if (!p.pen && Date.now() - lastPen >= 1000 && undoStack.length) { undo(); toast('元に戻しました(2本指タップ)'); }
+    if (set.tapUndo && !p.pen && Date.now() - lastPen >= 1000 && undoStack.length) { undo(); toast('元に戻しました(2本指タップ)'); }
     return;
   }
   zoomTo(zoom * p.s, p.c0.x, p.c0.y, p.c.x, p.c.y);
@@ -1869,6 +1869,10 @@ function editorMenu() {
     { label: `指で書く：${set.finger ? 'オン' : 'オフ'}(Pencilがないとき用)`, fn: () => {
       set.finger = !set.finger; saveSet(); scroller.style.touchAction = set.finger ? 'none' : '';
       toast(set.finger ? '指で書けます(スクロールは2本指)' : '指はスクロールに戻りました');
+    } },
+    { label: `2本指タップで元に戻す：${set.tapUndo ? 'オン' : 'オフ'}`, fn: () => {
+      set.tapUndo = !set.tapUndo; saveSet();
+      toast(set.tapUndo ? '2本指でトントンとタップすると元に戻ります' : '2本指タップでは元に戻らなくなりました(手のひらで消えるのを防ぎます)');
     } },
     { label: 'ノートの名前を変える', fn: async () => { const t = prompt('ノートの名前', n.title); if (t && t.trim()) { n.title = t.trim(); renderTabs(); await saveNote(); } } },
   ]);
