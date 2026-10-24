@@ -122,6 +122,7 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 .page canvas.hl{mix-blend-mode:multiply}
 .er-cursor{position:absolute;border:1.5px solid rgba(60,60,60,.6);border-radius:50%;pointer-events:none;transform:translate(-50%,-50%);background:rgba(255,255,255,.3)}
 .sel-box{position:absolute;border:1.5px dashed var(--accent);background:rgba(61,90,128,.06);pointer-events:none}
+.sel-box.to-note{border:2px solid #e08a00;background:rgba(255,170,0,.14)}
 .sel-menu{position:absolute;display:flex;gap:4px;transform:translateY(-100%);padding-bottom:6px;z-index:2}
 .sel-menu button{background:var(--text);color:#fff;border-radius:8px;padding:6px 12px;font-size:14px}
 .sel-menu.paste{transform:translate(-50%,calc(-100% - 22px));padding:0}
@@ -831,7 +832,7 @@ function showHelp() {
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
     + '・色：よく使う4色から選べます。虹色の丸を押すとパレットが開いて好きな色を選べます。4色の丸を長押しすると、その丸の色を入れ替えられます。\n'
     + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像は長押しで選ぶと、そのままドラッグで移動、右下の丸で大きさ変更、「削除」で消せます。ページの真ん中に近づくと点線のガイドが出て、ぴったり合います。\n'
-    + '・付箋：ページを長押し→「付箋」で貼れます。付箋の中にも書けます。上のふちをドラッグで移動(ほかのページへも動かせます。たたんだボタンもドラッグで動かせます)、右下で大きさ変更、「－」でたたむと小さなボタンになって下の文字が読めます。ボタンを押すと広がります。「×」で削除。「×」の左の丸で付箋の色を変えられます。広げている付箋の上から投げ縄で囲むと付箋の中の線を、たたんでいるときはノートの線を選べます。ノートの線を選んで付箋の上で離すと付箋の中へ、付箋の線を付箋の外で離すとノートへ移ります。PDF書き出しには広げている付箋だけ載ります。\n'
+    + '・付箋：ページを長押し→「付箋」で貼れます。付箋の中にも書けます。上のふちをドラッグで移動(ほかのページへも動かせます。たたんだボタンもドラッグで動かせます)、右下で大きさ変更、「－」でたたむと小さなボタンになって下の文字が読めます。ボタンを押すと広がります。「×」で削除。「×」の左の丸で付箋の色を変えられます。広げている付箋の上から投げ縄で囲むと付箋の中の線を、たたんでいるときはノートの線を選べます。ノートの線を選んで付箋の上へ動かすと枠がオレンジになり、離すと付箋の中へ移ります。付箋の線を付箋の外へ動かして離すとノートへ移ります。PDF書き出しには広げている付箋だけ載ります。\n'
     + '・ノートは3つまで同時に開けます。上のタブで切り替え、「＋」でほかのノートを開きます。\n'
     + '・よく使うペンは「＋登録」で保存。長押しで削除。\n'
     + '・「＋フォルダ」で科目ごとにまとめられます。フォルダの中にフォルダも作れます。ノートの「⋯」→「フォルダへ移動」。\n'
@@ -1531,7 +1532,12 @@ window.addEventListener('pointermove', e => {
     const to = !act.nid && pageAt(e.clientX, e.clientY);
     if (to && to !== st) moveToPage(to, e);
     else { applyInk(st.pg.id, act.result); sel.set = new Set(moved.filter((_, i) => act.idx[i])); drawSelBox(); }
-    act.drop = toPage(e, act.st);   // 離した場所(付箋の上ならそこへ移す)
+    // 選んだものの真ん中が広げた付箋の上なら、離したときにその付箋へ移す(枠の色で知らせる)
+    if (sel && sel.box) {
+      act.drop = { x: sel.box.x + sel.box.w / 2, y: sel.box.y + sel.box.h / 2 };
+      const tg = dropTarget(act.st, act.drop), src = selNote(act.st, act.nid);
+      sel.boxEl.classList.toggle('to-note', (tg && tg.id) !== (src && src.id));
+    }
     if (!act.nid) autoScroll(e);
   } else if (act.type === 'nmove' || act.type === 'nsize') {
     const pt = toPage(e, st), dx = pt.x - act.start.x, dy = pt.y - act.start.y;
@@ -1598,10 +1604,11 @@ function finishAct(e, cancelled) {
     if (!cancelled) doCrop(a);
   }
 }
+function dropTarget(st, pt) { return [...(inkMap.get(st.pg.id) || [])].reverse().find(s => s.t === 'n' && s.open && inBox(pt, s)) || null; }
 // 選んだ線を広げた付箋の上で離したら付箋の中へ、付箋の線を付箋の外で離したらページへ移す(画像はページに残す)
 function dropIntoNote(a) {
   const st = a.st, id = st.pg.id, now = inkMap.get(id) || [], src = selNote(st, a.nid);
-  const target = [...now].reverse().find(s => s.t === 'n' && s.open && inBox(a.drop, s)) || null;
+  const target = dropTarget(st, a.drop);
   if ((target && target.id) === (src && src.id)) return;
   const items = [...sel.set].filter(s => s.t !== 'i');
   if (!items.length) return;
