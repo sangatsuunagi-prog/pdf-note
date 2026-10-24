@@ -818,7 +818,7 @@ function showHelp() {
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
     + '・色：よく使う4色から選べます。虹色の丸を押すとパレットが開いて好きな色を選べます。4色の丸を長押しすると、その丸の色を入れ替えられます。\n'
     + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像は長押しで選ぶと、そのままドラッグで移動、右下の丸で大きさ変更、「削除」で消せます。ページの真ん中に近づくと点線のガイドが出て、ぴったり合います。\n'
-    + '・付箋：ページを長押し→「付箋」で貼れます。付箋の中にも書けます。上のふちをドラッグで移動、右下で大きさ変更、「－」でたたむと小さなボタンになって下の文字が読めます。ボタンを押すと広がります。「×」で削除。PDF書き出しには広げている付箋だけ載ります。\n'
+    + '・付箋：ページを長押し→「付箋」で貼れます。付箋の中にも書けます。上のふちをドラッグで移動、右下で大きさ変更、「－」でたたむと小さなボタンになって下の文字が読めます。ボタンを押すと広がります。「×」で削除。広げている付箋の上から投げ縄で囲むと付箋の中の線を、たたんでいるときはノートの線を選べます。PDF書き出しには広げている付箋だけ載ります。\n'
     + '・ノートは3つまで同時に開けます。上のタブで切り替え、「＋」でほかのノートを開きます。\n'
     + '・よく使うペンは「＋登録」で保存。長押しで削除。\n'
     + '・「＋フォルダ」で科目ごとにまとめられます。フォルダの中にフォルダも作れます。ノートの「⋯」→「フォルダへ移動」。\n'
@@ -1459,11 +1459,13 @@ pagesEl.addEventListener('pointerdown', e => {
   hidePaste();
   // 選んでいるもの(投げ縄・貼り付けた直後)は、右下の丸で大きさを変え、枠の中をドラッグで動かす
   if (selHit(st, pt)) {
-    const orig = inkMap.get(st.pg.id) || [], idx = orig.map(s => sel.set.has(s));
+    // 付箋の中の線を選んでいるときは、付箋の線(付箋の左上が原点)を動かす
+    const orig = inkMap.get(st.pg.id) || [], nn = selNote(st, sel.note), items = nn ? nn.ink : orig, idx = items.map(s => sel.set.has(s));
+    const off = nn ? { x: nn.x, y: nn.y } : { x: 0, y: 0 }, common = { orig, items, idx, nid: sel.note, off, result: orig };
     if (nearHandle(pt)) {
-      const ax = sel.box.x, ay = sel.box.y;
-      act = { ...base, type: 'scale', ax, ay, d0: Math.max(4, Math.hypot(pt.x - ax, pt.y - ay)), orig, idx, result: orig };
-    } else act = { ...base, type: 'move', start: pt, orig, idx, result: orig };
+      const ax = sel.box.x - off.x, ay = sel.box.y - off.y;
+      act = { ...base, type: 'scale', ax, ay, d0: Math.max(4, Math.hypot(pt.x - off.x - ax, pt.y - off.y - ay)), ...common };
+    } else act = { ...base, type: 'move', start: pt, ...common };
   } else if (t === 'pen' || t === 'hl') {
     clearSel();
     const cfg = set[t];
@@ -1507,12 +1509,15 @@ window.addEventListener('pointermove', e => {
   }
   if (act.type === 'move') {
     act.touched = act.touched || new Map([[st.pg.id, act.orig]]);   // 元に戻す用に、触ったページの最初の状態
-    const pt = toPage(e, st), [dx, dy] = snapCenter(st, pt.x - act.start.x, pt.y - act.start.y);
-    act.result = act.orig.map((s, i) => act.idx[i] ? moveItem(s, dx, dy) : s);
-    const to = pageAt(e.clientX, e.clientY);
+    const pt = toPage(e, st);
+    let dx = pt.x - act.start.x, dy = pt.y - act.start.y;
+    if (!act.nid) [dx, dy] = snapCenter(st, dx, dy);   // 付箋の中では真ん中合わせ・ページまたぎはしない
+    const moved = act.items.map((s, i) => act.idx[i] ? moveItem(s, dx, dy) : s);
+    act.result = withItems(act.orig, act.nid, moved);
+    const to = !act.nid && pageAt(e.clientX, e.clientY);
     if (to && to !== st) moveToPage(to, e);
-    else { applyInk(st.pg.id, act.result); sel.set = new Set(act.result.filter((_, i) => act.idx[i])); drawSelBox(); }
-    autoScroll(e);
+    else { applyInk(st.pg.id, act.result); sel.set = new Set(moved.filter((_, i) => act.idx[i])); drawSelBox(); }
+    if (!act.nid) autoScroll(e);
   } else if (act.type === 'nmove' || act.type === 'nsize') {
     const pt = toPage(e, st), dx = pt.x - act.start.x, dy = pt.y - act.start.y;
     if (!act.moved && Math.hypot(dx, dy) * st.el.getBoundingClientRect().width / st.pg.w > 6) act.moved = true;
@@ -1526,10 +1531,11 @@ window.addEventListener('pointermove', e => {
       applyInk(st.pg.id, act.result);
     }
   } else if (act.type === 'scale') {
-    const pt = toPage(e, st), f = clamp(Math.hypot(pt.x - act.ax, pt.y - act.ay) / act.d0, 0.1, 10);
-    act.result = act.orig.map((s, i) => act.idx[i] ? scaleItem(s, act.ax, act.ay, f) : s);
+    const pt = toPage(e, st), f = clamp(Math.hypot(pt.x - act.off.x - act.ax, pt.y - act.off.y - act.ay) / act.d0, 0.1, 10);
+    const scaled = act.items.map((s, i) => act.idx[i] ? scaleItem(s, act.ax, act.ay, f) : s);
+    act.result = withItems(act.orig, act.nid, scaled);
     applyInk(st.pg.id, act.result);
-    sel.set = new Set(act.result.filter((_, i) => act.idx[i])); drawSelBox();
+    sel.set = new Set(scaled.filter((_, i) => act.idx[i])); drawSelBox();
   }
   if (act.live) queueLive();
 }, { passive: false });
@@ -1575,7 +1581,7 @@ function finishAct(e, cancelled) {
 const SNAP_PX = 10;
 let guides = null;
 function snapCenter(st, dx, dy) {
-  const b = act.box0 || (act.box0 = itemsBox(act.orig.filter((_, i) => act.idx[i])));
+  const b = act.box0 || (act.box0 = itemsBox(act.items.filter((_, i) => act.idx[i])));
   const k = st.el.getBoundingClientRect().width / st.pg.w;
   const ox = st.pg.w / 2 - ((b.x1 + b.x2) / 2 + dx), oy = st.pg.h / 2 - ((b.y1 + b.y2) / 2 + dy);
   const sx = Math.abs(ox) * k < SNAP_PX, sy = Math.abs(oy) * k < SNAP_PX;
@@ -1632,7 +1638,7 @@ function moveToPage(to, e) {
   const after = [...tb, ...moving];
   applyInk(to.pg.id, after);
   hideGuides();
-  Object.assign(act, { box0: null, st: to, orig: after, result: after, idx: after.map((_, i) => i >= tb.length), start: toPage(e, to) });
+  Object.assign(act, { box0: null, st: to, orig: after, items: after, result: after, idx: after.map((_, i) => i >= tb.length), start: toPage(e, to) });
   clearSel(); sel = { st: to, set: new Set(moving) }; drawSelBox();
 }
 function cancelAct() { if (act) finishAct({ pointerId: act.id }, true); }
@@ -1690,18 +1696,24 @@ function pip(x, y, poly) {
 }
 function finishLasso(a) {
   if (a.poly.length < 6) return;
-  const strokes = inkMap.get(a.st.pg.id) || [];
+  // 広げた付箋の上から囲み始めたら付箋の中の線、それ以外(たたんだ付箋も)はページの線を選ぶ
+  const n0 = noteAt(a.st, { x: a.poly[0], y: a.poly[1] }), nn = n0 && n0.open ? n0 : null;
+  const strokes = nn ? nn.ink : inkMap.get(a.st.pg.id) || [];
+  const poly = nn ? a.poly.map((v, j) => v - (j % 2 ? nn.y : nn.x)) : a.poly;
   const chosen = strokes.filter(s => {
-    if (s.t === 'n') return false;   // 付箋は投げ縄では選ばない(つまみで動かす)
-    if (s.t === 'i') return pip(s.x + s.w / 2, s.y + s.h / 2, a.poly);
+    if (s.t === 'n') return false;   // 付箋そのものは投げ縄では選ばない(つまみで動かす)
+    if (s.t === 'i') return pip(s.x + s.w / 2, s.y + s.h / 2, poly);
     let n = 0, inn = 0;
-    for (let i = 0; i < s.p.length; i += 2) { n++; if (pip(s.p[i], s.p[i + 1], a.poly)) inn++; }
+    for (let i = 0; i < s.p.length; i += 2) { n++; if (pip(s.p[i], s.p[i + 1], poly)) inn++; }
     return inn / n >= 0.5;
   });
   if (!chosen.length) return;
-  sel = { st: a.st, set: new Set(chosen) };
+  sel = { st: a.st, set: new Set(chosen), note: nn && nn.id };
   drawSelBox();
 }
+// 選んでいる線が入っている付箋(ページの線なら null)と、その中身を入れ替えたページの書き込み
+function selNote(st, nid) { return nid ? (inkMap.get(st.pg.id) || []).find(s => s.t === 'n' && s.id === nid) || null : null; }
+function withItems(page, nid, items) { return nid ? page.map(s => s.t === 'n' && s.id === nid ? { ...s, ink: items } : s) : items; }
 // 線・画像を囲む四角(pt)
 function itemsBox(items) {
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
@@ -1716,13 +1728,18 @@ function itemsBox(items) {
 }
 function drawSelBox() {
   if (!sel) return;
-  const { x1, y1, x2, y2 } = itemsBox(sel.set);
-  const pad = 4; sel.box = { x: x1 - pad, y: y1 - pad, w: x2 - x1 + pad * 2, h: y2 - y1 + pad * 2 };
+  const nn = selNote(sel.st, sel.note);
+  if (sel.note && !(nn && nn.open)) { clearSel(); return; }
+  const ox = nn ? nn.x : 0, oy = nn ? nn.y : 0, { x1, y1, x2, y2 } = itemsBox(sel.set);
+  const pad = 4; sel.box = { x: x1 + ox - pad, y: y1 + oy - pad, w: x2 - x1 + pad * 2, h: y2 - y1 + pad * 2 };
   const { pg, el: pe } = sel.st;
   if (!sel.boxEl) {
     sel.boxEl = el('div', 'sel-box'); sel.menu = el('div', 'sel-menu');
     const del = el('button', null, '削除');
-    onTap(del, () => { const id = sel.st.pg.id, before = inkMap.get(id); commitInk(id, before, before.filter(s => !sel.set.has(s))); clearSel(); });
+    onTap(del, () => {
+      const id = sel.st.pg.id, before = inkMap.get(id), nn = selNote(sel.st, sel.note);
+      commitInk(id, before, withItems(before, sel.note, (nn ? nn.ink : before).filter(s => !sel.set.has(s)))); clearSel();
+    });
     sel.handle = el('div', 'sel-handle');
     sel.menu.append(del); pe.append(sel.boxEl, sel.handle, sel.menu);
   }
@@ -1885,7 +1902,7 @@ function pickUp(st, img, pt, id, pointerType) {
   clearSel(); hidePaste();
   sel = { st, set: new Set([img]) }; drawSelBox();
   const orig = inkMap.get(st.pg.id) || [];
-  act = { st, id, pointerType, type: 'move', start: pt, orig, idx: orig.map(s => s === img), result: orig };
+  act = { st, id, pointerType, type: 'move', start: pt, orig, items: orig, off: { x: 0, y: 0 }, idx: orig.map(s => s === img), result: orig };
   try { st.el.setPointerCapture(id); } catch {}
   if (navigator.vibrate) navigator.vibrate(10);
   toast('画像を選びました。そのままドラッグで移動、右下の丸で大きさ変更');
