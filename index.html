@@ -745,7 +745,7 @@ function showHelp() {
   const b = el('div', 'body');
   b.style.whiteSpace = 'pre-line';
   b.textContent = '・Apple Pencilで書きます。指はスクロール、2本指で拡大・縮小。\n'
-    + '・2本指でトントンとタップすると「元に戻す」。\n'
+    + '・2本指でトントンとタップすると「元に戻す」(Pencilで書いた直後1秒間は、手のひらと区別するため効きません)。\n'
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
     + '・色：よく使う4色から選べます。虹色の丸を押すとパレットが開いて好きな色を選べます。4色の丸を長押しすると、その丸の色を入れ替えられます。\n'
     + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像は長押しで選ぶと、そのままドラッグで移動、右下の丸で大きさ変更、「削除」で消せます。ページの真ん中に近づくと点線のガイドが出て、ぴったり合います。\n'
@@ -1321,6 +1321,7 @@ function endLive() { if (act && act.live) { act.live.width = act.live.height = 0
 
 pagesEl.addEventListener('pointerdown', e => {
   if (e.target.closest('.sel-menu')) return;
+  if (pinch && e.pointerType === 'pen') cancelPinch();
   if (act || pinch) return;
   const pe = e.target.closest('.page'); if (!pe) return;
   const st = pstate.get(pe.dataset.id); if (!st) return;
@@ -1733,6 +1734,7 @@ scroller.addEventListener('touchstart', e => {
     if (pe && pe === st.el && selHit(st, toPage(ts[0], st))) e.preventDefault();
   }
   if (ts.length === 2 && !pinch) {
+    if (act && act.pointerType === 'pen') return;   // Pencilで書いている間の手のひらはピンチにしない
     if (act && act.pointerType === 'touch') cancelAct();
     startPinch(ts); e.preventDefault();
   }
@@ -1753,7 +1755,7 @@ const dist = ts => Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[
 function startPinch(ts) {
   const c = center(ts), rect = scroller.getBoundingClientRect();
   const ox = scroller.scrollLeft + c.x - rect.left, oy = scroller.scrollTop + c.y - rect.top;
-  pinch = { d0: dist(ts), c0: c, c, s: 1, t0: Date.now(), moved: 0 };
+  pinch = { d0: dist(ts), c0: c, c, s: 1, t0: Date.now(), moved: 0, pen: Date.now() - lastPen < 1000 };
   pagesEl.style.transformOrigin = `${ox - pagesEl.offsetLeft}px ${oy - pagesEl.offsetTop}px`;
 }
 function movePinch(ts) {
@@ -1765,9 +1767,15 @@ function movePinch(ts) {
 function endPinch() {
   const p = pinch; pinch = null;
   pagesEl.style.transform = '';
-  if (Date.now() - p.t0 < 300 && p.moved < 12) { undo(); return; }   // 2本指タップで元に戻す
+  // 2本指タップで元に戻す。Pencilを使った直後の手のひらは2本指タップとみなさない
+  if (Date.now() - p.t0 < 300 && p.moved < 12) {
+    if (!p.pen && Date.now() - lastPen >= 1000 && undoStack.length) { undo(); toast('元に戻しました(2本指タップ)'); }
+    return;
+  }
   zoomTo(zoom * p.s, p.c0.x, p.c0.y, p.c.x, p.c.y);
 }
+// 手のひらでピンチが始まったあとにPencilが触れたら、ピンチをやめてPencilで書けるようにする
+function cancelPinch() { pinch = null; pagesEl.style.transform = ''; }
 function zoomTo(z, cx, cy, cx1 = cx, cy1 = cy) {
   z = clamp(z, 0.5, 4);
   const rect = scroller.getBoundingClientRect();
