@@ -107,6 +107,9 @@ body.selecting #toast{bottom:calc(env(safe-area-inset-bottom) + 86px)}
 .al{width:30px;height:24px;border-radius:6px;border:1px solid var(--line)}
 .al.on{box-shadow:0 0 0 2px var(--accent)}
 .hinttxt{font-size:13px;color:var(--sub);padding:0 6px}
+.note-colors{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;padding:6px 0 10px}
+.note-colors .nc{width:46px;height:46px;border-radius:10px;border:1px solid #b0b0b0;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.note-colors .nc.on{outline:3px solid var(--accent);outline-offset:2px}
 .preset{-webkit-touch-callout:none;height:30px;padding:0 8px;border-radius:8px;border:1px solid var(--line);display:flex;align-items:center;gap:5px;font-size:12px;background:#fff}
 .preset i{display:block;border-radius:50%}
 /* 道具の列はノートの上に重ねる(道具を替えて列の高さが変わっても、ノートは動かない) */
@@ -440,9 +443,12 @@ function paintLayer(c, strokes, kind, x, y, w) {
 }
 // ---------- 付箋 ----------
 // {t:'n', id, x, y, w, h, open, ink:[線(付箋の左上が原点)]}。ページの書き込みのいちばん上に重ねる。
-// 上のふち(つまみ)でドラッグ移動、右上の「－」でたたむ(小さなボタンになる)、その左の「×」で削除、右下で大きさ変更
-const NOTE_BAR = 22, NOTE_GRID = 10, NOTE_BTN = 30, NOTE_MIN_W = 90, NOTE_MIN_H = 70;
-const NOTE_LINE = '#e2e2e2', NOTE_EDGE = '#b0b0b0', NOTE_BARC = '#ececec', NOTE_ICON = '#666666';
+// 上のふち(つまみ)でドラッグ移動、右上の「－」でたたむ(小さなボタンになる)、その左の「×」で削除、その左の丸で色、右下で大きさ変更
+// 色は bg(なければ白)。方眼・つまみは黒をうすく重ねるので、どの色の上でも同じように見える
+const NOTE_BAR = 22, NOTE_GRID = 10, NOTE_BTN = 30, NOTE_MIN_W = 110, NOTE_MIN_H = 70;
+const NOTE_LINE_A = 0.11, NOTE_BAR_A = 0.075, NOTE_EDGE = '#b0b0b0', NOTE_ICON = '#666666';
+const NOTE_COLORS = [['#ffffff', '白'], ['#fff6b0', '黄'], ['#ffe2bf', 'オレンジ'], ['#ffd9e4', 'ピンク'], ['#eadfff', 'むらさき'], ['#d8ebff', '水色'], ['#daf3d5', '緑'], ['#ececec', 'グレー']];
+const noteBg = n => n.bg || '#ffffff';
 const noteBtnBox = n => ({ x: n.x + n.w - NOTE_BTN, y: n.y, w: NOTE_BTN, h: NOTE_BTN });
 const noteBox = n => n.open ? n : noteBtnBox(n);
 function drawNote(ctx, n) {
@@ -454,19 +460,19 @@ function drawNote(ctx, n) {
     // たたんだ付箋:小さな方眼のボタン(角を折った形)
     const b = noteBtnBox(n), f = 8;
     ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x + b.w - f, b.y); ctx.lineTo(b.x + b.w, b.y + f); ctx.lineTo(b.x + b.w, b.y + b.h); ctx.lineTo(b.x, b.y + b.h); ctx.closePath();
-    ctx.fillStyle = '#f7f7f5'; ctx.fill(); ctx.shadowColor = 'transparent'; ctx.stroke();
-    ctx.save(); ctx.clip(); ctx.beginPath(); ctx.strokeStyle = '#d6d6d6'; ctx.lineWidth = 0.6;
+    ctx.fillStyle = noteBg(n); ctx.fill(); ctx.shadowColor = 'transparent'; ctx.stroke();
+    ctx.save(); ctx.clip(); ctx.beginPath(); ctx.strokeStyle = 'rgba(0,0,0,.16)'; ctx.lineWidth = 0.6;
     for (let i = 7.5; i < b.w; i += 7.5) { ctx.moveTo(b.x + i, b.y); ctx.lineTo(b.x + i, b.y + b.h); ctx.moveTo(b.x, b.y + i); ctx.lineTo(b.x + b.w, b.y + i); }
     ctx.stroke(); ctx.restore();
     ctx.beginPath(); ctx.moveTo(b.x + b.w - f, b.y); ctx.lineTo(b.x + b.w - f, b.y + f); ctx.lineTo(b.x + b.w, b.y + f); ctx.closePath();
-    ctx.fillStyle = '#dcdcdc'; ctx.fill(); ctx.stroke();
+    ctx.fillStyle = 'rgba(0,0,0,.14)'; ctx.fill(); ctx.stroke();
     ctx.restore(); return;
   }
-  ctx.fillStyle = '#fff'; ctx.fillRect(n.x, n.y, n.w, n.h);
+  ctx.fillStyle = noteBg(n); ctx.fillRect(n.x, n.y, n.w, n.h);
   ctx.shadowColor = 'transparent';
   // 方眼(書くところだけ)
   const top = n.y + NOTE_BAR;
-  ctx.beginPath(); ctx.strokeStyle = NOTE_LINE; ctx.lineWidth = 0.5;
+  ctx.beginPath(); ctx.strokeStyle = `rgba(0,0,0,${NOTE_LINE_A})`; ctx.lineWidth = 0.5;
   for (let y = top + NOTE_GRID; y < n.y + n.h; y += NOTE_GRID) { ctx.moveTo(n.x, y); ctx.lineTo(n.x + n.w, y); }
   for (let x = n.x + NOTE_GRID; x < n.x + n.w; x += NOTE_GRID) { ctx.moveTo(x, top); ctx.lineTo(x, n.y + n.h); }
   ctx.stroke();
@@ -480,7 +486,7 @@ function drawNote(ctx, n) {
   for (const s of n.ink) if (s.t !== 'h') drawStroke(ctx, s);
   ctx.restore();
   // つまみ・ボタン
-  ctx.fillStyle = NOTE_BARC; ctx.fillRect(n.x, n.y, n.w, NOTE_BAR);
+  ctx.fillStyle = `rgba(0,0,0,${NOTE_BAR_A})`; ctx.fillRect(n.x, n.y, n.w, NOTE_BAR);
   ctx.strokeStyle = NOTE_EDGE; ctx.lineWidth = 0.6;
   ctx.beginPath(); ctx.moveTo(n.x, top); ctx.lineTo(n.x + n.w, top); ctx.stroke();
   const cx = n.x + n.w - NOTE_BAR / 2, cy = n.y + NOTE_BAR / 2, q = 5;
@@ -488,9 +494,16 @@ function drawNote(ctx, n) {
   ctx.beginPath(); ctx.moveTo(cx - q, cy + 2); ctx.lineTo(cx + q, cy + 2);   // 「－」たたむ
   const dx = cx - NOTE_BAR - 4, q2 = 4;
   ctx.moveTo(dx - q2, cy - q2); ctx.lineTo(dx + q2, cy + q2); ctx.moveTo(dx + q2, cy - q2); ctx.lineTo(dx - q2, cy + q2);   // 「×」削除
-  // つまみの印(真ん中の2本線)
-  const mx = n.x + (n.w - NOTE_BAR * 2 - 8) / 2;
-  ctx.lineWidth = 1.2; ctx.stroke(); ctx.beginPath(); ctx.strokeStyle = '#9a9a9a';
+  ctx.stroke();
+  // 「色」:4色に分けた丸
+  const px = dx - NOTE_BAR - 6, pr = 5.5;
+  ['#ffd54f', '#f48fb1', '#64b5f6', '#81c784'].forEach((c, i) => {
+    ctx.beginPath(); ctx.moveTo(px, cy); ctx.arc(px, cy, pr, (i - 1) * Math.PI / 2, i * Math.PI / 2); ctx.closePath(); ctx.fillStyle = c; ctx.fill();
+  });
+  ctx.beginPath(); ctx.arc(px, cy, pr, 0, Math.PI * 2); ctx.lineWidth = 0.8; ctx.strokeStyle = NOTE_ICON; ctx.stroke();
+  // つまみの印(残りの真ん中の2本線)
+  const mx = n.x + (n.w - NOTE_BAR * 3 - 14) / 2;
+  ctx.lineWidth = 1.2; ctx.beginPath(); ctx.strokeStyle = '#9a9a9a';
   ctx.moveTo(mx - 9, cy - 2); ctx.lineTo(mx + 9, cy - 2); ctx.moveTo(mx - 9, cy + 2); ctx.lineTo(mx + 9, cy + 2);
   // 右下の大きさ変更の印
   const ex = n.x + n.w, ey = n.y + n.h;
@@ -818,7 +831,7 @@ function showHelp() {
     + '・投げ縄：囲んだ線を選び、ドラッグで移動、「削除」で消せます。\n'
     + '・色：よく使う4色から選べます。虹色の丸を押すとパレットが開いて好きな色を選べます。4色の丸を長押しすると、その丸の色を入れ替えられます。\n'
     + '・切り取り：囲んだ部分を画像にしてコピー・共有できます。コピーしたら、ページを指かPencilで長押し→「貼り付け」。貼り付けた画像は長押しで選ぶと、そのままドラッグで移動、右下の丸で大きさ変更、「削除」で消せます。ページの真ん中に近づくと点線のガイドが出て、ぴったり合います。\n'
-    + '・付箋：ページを長押し→「付箋」で貼れます。付箋の中にも書けます。上のふちをドラッグで移動、右下で大きさ変更、「－」でたたむと小さなボタンになって下の文字が読めます。ボタンを押すと広がります。「×」で削除。広げている付箋の上から投げ縄で囲むと付箋の中の線を、たたんでいるときはノートの線を選べます。PDF書き出しには広げている付箋だけ載ります。\n'
+    + '・付箋：ページを長押し→「付箋」で貼れます。付箋の中にも書けます。上のふちをドラッグで移動、右下で大きさ変更、「－」でたたむと小さなボタンになって下の文字が読めます。ボタンを押すと広がります。「×」で削除。「×」の左の丸で付箋の色を変えられます。広げている付箋の上から投げ縄で囲むと付箋の中の線を、たたんでいるときはノートの線を選べます。PDF書き出しには広げている付箋だけ載ります。\n'
     + '・ノートは3つまで同時に開けます。上のタブで切り替え、「＋」でほかのノートを開きます。\n'
     + '・よく使うペンは「＋登録」で保存。長押しで削除。\n'
     + '・「＋フォルダ」で科目ごとにまとめられます。フォルダの中にフォルダも作れます。ノートの「⋯」→「フォルダへ移動」。\n'
@@ -896,13 +909,14 @@ function drawNotesPdf(page, strokes, ox, top) {
   for (const n of strokes) {
     if (n.t !== 'n' || !n.open) continue;
     const X = ox + n.x, Y = top - n.y - n.h, bodyH = n.h - NOTE_BAR;
-    page.drawRectangle({ x: X, y: Y, width: n.w, height: n.h, color: L.rgb(1, 1, 1) });
-    for (let y = NOTE_BAR + NOTE_GRID; y < n.h; y += NOTE_GRID) page.drawLine({ start: { x: X, y: top - n.y - y }, end: { x: X + n.w, y: top - n.y - y }, thickness: 0.5, color: hexRgb(NOTE_LINE) });
-    for (let x = NOTE_GRID; x < n.w; x += NOTE_GRID) page.drawLine({ start: { x: X + x, y: Y }, end: { x: X + x, y: Y + bodyH }, thickness: 0.5, color: hexRgb(NOTE_LINE) });
+    const black = L.rgb(0, 0, 0);
+    page.drawRectangle({ x: X, y: Y, width: n.w, height: n.h, color: hexRgb(noteBg(n)) });
+    for (let y = NOTE_BAR + NOTE_GRID; y < n.h; y += NOTE_GRID) page.drawLine({ start: { x: X, y: top - n.y - y }, end: { x: X + n.w, y: top - n.y - y }, thickness: 0.5, color: black, opacity: NOTE_LINE_A });
+    for (let x = NOTE_GRID; x < n.w; x += NOTE_GRID) page.drawLine({ start: { x: X + x, y: Y }, end: { x: X + x, y: Y + bodyH }, thickness: 0.5, color: black, opacity: NOTE_LINE_A });
     page.pushOperators(L.pushGraphicsState(), L.rectangle(X, Y, n.w, bodyH), L.clip(), L.endPath());
     drawStrokesPdf(page, n.ink, X, top - n.y);
     page.pushOperators(L.popGraphicsState());
-    page.drawRectangle({ x: X, y: Y + bodyH, width: n.w, height: NOTE_BAR, color: hexRgb(NOTE_BARC) });
+    page.drawRectangle({ x: X, y: Y + bodyH, width: n.w, height: NOTE_BAR, color: black, opacity: NOTE_BAR_A });
     page.drawRectangle({ x: X, y: Y, width: n.w, height: n.h, borderColor: hexRgb(NOTE_EDGE), borderWidth: 0.8 });
   }
 }
@@ -1866,7 +1880,7 @@ function noteAt(st, pt) {
   for (let i = a.length - 1; i >= 0; i--) { const s = a[i]; if (s.t === 'n' && inBox(pt, noteBox(s))) return s; }
   return null;
 }
-// 付箋のどこを触ったか: btn(たたんだボタン) / fold(－) / del(×) / bar(つまみ) / size(右下) / body(書くところ)
+// 付箋のどこを触ったか: btn(たたんだボタン) / fold(－) / del(×) / color(色) / bar(つまみ) / size(右下) / body(書くところ)
 function noteHit(st, pt) {
   const n = noteAt(st, pt); if (!n) return null;
   if (!n.open) return { n, part: 'btn' };
@@ -1874,7 +1888,7 @@ function noteHit(st, pt) {
   if (Math.hypot(n.x + n.w - pt.x, n.y + n.h - pt.y) * k < 26) return { n, part: 'size' };
   if (pt.y > n.y + NOTE_BAR) return { n, part: 'body' };
   const fromRight = n.x + n.w - pt.x;
-  return { n, part: fromRight < NOTE_BAR + 4 ? 'fold' : fromRight < NOTE_BAR * 2 + 10 ? 'del' : 'bar' };
+  return { n, part: fromRight < NOTE_BAR + 4 ? 'fold' : fromRight < NOTE_BAR * 2 + 10 ? 'del' : fromRight < NOTE_BAR * 3 + 16 ? 'color' : 'bar' };
 }
 function addNote(st, pt) {
   const pg = st.pg, w = Math.min(200, pg.w), h = Math.min(150, pg.h);
@@ -1891,6 +1905,19 @@ function noteTap(st, nid, part) {
     const open = part === 'btn', pg = st.pg;
     const m = open ? { open, x: r2(clamp(n.x, 0, pg.w - n.w)), y: r2(clamp(n.y, 0, pg.h - n.h)) } : { open };
     applyInk(id, a.map(s => s === n ? { ...n, ...m } : s));
+  } else if (part === 'color') {
+    eatClick();
+    const body = el('div', 'note-colors');
+    for (const [c, name] of NOTE_COLORS) {
+      const b = el('button', 'nc' + (c === noteBg(n) ? ' on' : '')); b.style.background = c; b.setAttribute('aria-label', name);
+      b.onclick = () => {
+        document.querySelector('.sheet-bg')?.remove();
+        const now = inkMap.get(id) || [], cur = now.find(s => s.t === 'n' && s.id === nid);
+        if (cur && noteBg(cur) !== c) commitInk(id, now, now.map(s => s === cur ? { ...cur, bg: c } : s));
+      };
+      body.append(b);
+    }
+    sheet('付箋の色', [], body);
   } else if (part === 'del') {
     eatClick();   // 指を離したときのクリックでメニューがすぐ閉じないように
     sheet('付箋', [{ label: 'この付箋を削除する', danger: true, fn: () => {
