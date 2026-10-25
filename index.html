@@ -2142,13 +2142,21 @@ function endPinch() {
 }
 // 手のひらでピンチが始まったあとにPencilが触れたら、ピンチをやめてPencilで書けるようにする
 function cancelPinch() { pinch = null; pagesEl.style.transform = ''; }
+// (cx, cy) にあったページ上の点が、拡大・縮小のあと (cx1, cy1) に来るようにする。
+// ページの間のすき間や上の余白は拡大しないので、全体ではなく指の下(いちばん近い)のページを基準に合わせる
 function zoomTo(z, cx, cy, cx1 = cx, cy1 = cy) {
   z = clamp(z, 0.5, 4);
-  const rect = scroller.getBoundingClientRect();
-  const ox = scroller.scrollLeft + cx - rect.left, oy = scroller.scrollTop + cy - rect.top, k = z / zoom;
+  let st = null, best = Infinity;
+  for (const s of pstate.values()) {
+    const r = s.el.getBoundingClientRect(), d = cy < r.top ? r.top - cy : cy > r.bottom ? cy - r.bottom : 0;
+    if (d < best) { best = d; st = s; }
+  }
+  const r0 = st.el.getBoundingClientRect(), k0 = r0.width / st.pg.w;
+  const px = (cx - r0.left) / k0, py = (cy - r0.top) / k0;
   zoom = z; layout();
-  scroller.scrollLeft = ox * k - (cx1 - rect.left);
-  scroller.scrollTop = oy * k - (cy1 - rect.top);
+  const r1 = st.el.getBoundingClientRect(), k1 = r1.width / st.pg.w;
+  scroller.scrollLeft += r1.left + px * k1 - cx1;
+  scroller.scrollTop += r1.top + py * k1 - cy1;
 }
 // パソコンで試すとき用: Ctrl+ホイールで拡大
 scroller.addEventListener('wheel', e => { if (e.ctrlKey) { e.preventDefault(); zoomTo(zoom * Math.exp(-e.deltaY / 300), e.clientX, e.clientY); } }, { passive: false });
