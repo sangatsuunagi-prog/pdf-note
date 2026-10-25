@@ -1,5 +1,5 @@
 // オフラインでも開けるように、アプリのファイルをiPadに保存しておく
-const VERSION = 'pdfnote-v26';
+const VERSION = 'pdfnote-v27';
 const CORE = [
   './', 'index.html', 'manifest.webmanifest',
   'vendor/pdfjs/build/pdf.min.js', 'vendor/pdfjs/build/pdf.worker.min.js', 'vendor/pdf-lib.min.js',

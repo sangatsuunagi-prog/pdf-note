@@ -1255,19 +1255,80 @@ async function updateDetails() {
 }
 
 // ---------- 書き込みの保存・元に戻す ----------
-function applyInk(pageId, strokes) {
+// lazy=true(消しゴム・ドラッグ中など何度も呼ぶとき)は、描き直しを次の画面更新で1回にまとめる。
+// lazy に範囲 {x1,y1,x2,y2} を渡すと、その範囲だけ描き直す(消しゴム)
+function applyInk(pageId, strokes, lazy) {
+  const prev = inkMap.get(pageId) || [];
   inkMap.set(pageId, strokes);
-  const st = pstate.get(pageId); if (st) drawInk(st);
+  const st = pstate.get(pageId);
+  if (st) {
+    const s = strokes[strokes.length - 1];
+    // 線を1本書き足しただけなら、その線だけを上に描く(書き込みが多いページで、書くたびに全部描き直すと重いため)
+    if (!drawQ.has(st) && strokes.length === prev.length + 1 && (s.t === 'p' || s.t === 'h') && prev.every((x, i) => strokes[i] === x)) appendStroke(st, s);
+    else if (lazy) queueDraw(st, lazy === true ? null : lazy);
+    else { drawQ.delete(st); drawInk(st); }
+  }
   thumbCache.delete(pageId); dirty.add(pageId); cur.changed = true;
-  clearTimeout(saveTimer); saveTimer = setTimeout(flushInk, 600);
+  clearTimeout(saveTimer); saveTimer = setTimeout(flushInk, 1500);   // 保存は手を止めて少したってから(書いている最中に保存で引っかからないように)
 }
+function appendStroke(st, s) {
+  const add = (c, x, y, w) => { if (!c.width) return; const ctx = c.getContext('2d'), k = c.width / w; ctx.setTransform(k, 0, 0, k, -x * k, -y * k); drawStroke(ctx, s); };
+  add(s.t === 'h' ? st.hl : st.ink, 0, 0, st.pg.w);
+  const d = st.detail; if (d) add(s.t === 'h' ? d.hl : d.ink, d.x, d.y, d.w);
+}
+const drawQ = new Map(); let drawQueued = false;   // ページ → 描き直す範囲(null はページ全体)
+function queueDraw(st, box) {
+  drawQ.set(st, drawQ.has(st) ? box && drawQ.get(st) && unionBox(drawQ.get(st), box) : box);
+  if (drawQueued) return; drawQueued = true;
+  requestAnimationFrame(() => {
+    drawQueued = false; const l = [...drawQ]; drawQ.clear();
+    for (const [x, b] of l) if (pstate.get(x.pg.id) === x) b ? drawInkRegion(x, b) : drawInk(x);
+  });
+}
+// 範囲 b の中だけ消して描き直す(画像は消しゴムで変わらないので描き直さない)
+function drawInkRegion(st, b) {
+  const strokes = inkMap.get(st.pg.id) || [], w = st.pg.w, d = st.detail;
+  paintRegion(st.hl, strokes, 'h', 0, 0, w, b); paintRegion(st.ink, strokes, 'p', 0, 0, w, b); paintRegion(st.nt, strokes, 'n', 0, 0, w, b);
+  if (d) { paintRegion(d.hl, strokes, 'h', d.x, d.y, d.w, b); paintRegion(d.ink, strokes, 'p', d.x, d.y, d.w, b); paintRegion(d.nt, strokes, 'n', d.x, d.y, d.w, b); }
+}
+function paintRegion(c, strokes, kind, x, y, w, b) {
+  if (!c.width) return;
+  const ctx = c.getContext('2d'), k = c.width / w;
+  // 境目がにじまないよう、画像の点の区切りにそろえて切り抜く
+  const px1 = Math.max(0, Math.floor((b.x1 - x) * k)), py1 = Math.max(0, Math.floor((b.y1 - y) * k));
+  const px2 = Math.min(c.width, Math.ceil((b.x2 - x) * k)), py2 = Math.min(c.height, Math.ceil((b.y2 - y) * k));
+  if (px2 <= px1 || py2 <= py1) return;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.beginPath(); ctx.rect(px1, py1, px2 - px1, py2 - py1); ctx.clip(); ctx.clearRect(px1, py1, px2 - px1, py2 - py1);
+  ctx.setTransform(k, 0, 0, k, -x * k, -y * k);
+  const r = { x1: x + px1 / k, y1: y + py1 / k, x2: x + px2 / k, y2: y + py2 / k };
+  for (const s of strokes) {
+    if (kindOf(s) !== kind) continue;
+    const sb = strokeBox(s); if (sb.x2 < r.x1 || sb.x1 > r.x2 || sb.y2 < r.y1 || sb.y1 > r.y2) continue;
+    kind === 'n' ? drawNote(ctx, s) : drawStroke(ctx, s);
+  }
+  ctx.restore();
+}
+// 線・画像・付箋を囲む四角(pt)。付箋は影の分だけ広め
+const boxCache = new WeakMap();
+function strokeBox(s) {
+  let b = boxCache.get(s);
+  if (!b) {
+    if (s.t === 'n' || s.t === 'i') { const e = s.t === 'n' ? 8 : 0; b = { x1: s.x - e, y1: s.y - e, x2: s.x + s.w + e, y2: s.y + s.h + e }; }
+    else { const { x1, y1, x2, y2 } = itemsBox([s]); const e = s.w * 0.75 + 1; b = { x1: x1 - e, y1: y1 - e, x2: x2 + e, y2: y2 + e }; }   // 蛍光ペンの四角い端の分も
+    boxCache.set(s, b);
+  }
+  return b;
+}
+const unionBox = (a, b) => a ? { x1: Math.min(a.x1, b.x1), y1: Math.min(a.y1, b.y1), x2: Math.max(a.x2, b.x2), y2: Math.max(a.y2, b.y2) } : b;
 async function flushInk() {
   clearTimeout(saveTimer);
   const ids = [...dirty]; dirty.clear();
   if (ids.length) await DB.putMany('ink', ids.map(id => ({ pageId: id, strokes: inkMap.get(id) || [] })));
 }
+const UNDO_MAX = 10;   // 元に戻せる回数
 function pushUndo(pageId, before, after) {
-  undoStack.push({ pageId, before, after }); if (undoStack.length > 200) undoStack.shift();
+  undoStack.push({ pageId, before, after }); if (undoStack.length > UNDO_MAX) undoStack.shift();
   redoStack = []; updateUndo();
 }
 function commitInk(pageId, before, after) { applyInk(pageId, after); pushUndo(pageId, before, after); }
@@ -1531,7 +1592,7 @@ window.addEventListener('pointermove', e => {
     act.result = withItems(act.orig, act.nid, moved);
     const to = !act.nid && pageAt(e.clientX, e.clientY);
     if (to && to !== st) moveToPage(to, e);
-    else { applyInk(st.pg.id, act.result); sel.set = new Set(moved.filter((_, i) => act.idx[i])); drawSelBox(); }
+    else { applyInk(st.pg.id, act.result, true); sel.set = new Set(moved.filter((_, i) => act.idx[i])); drawSelBox(); }
     // 選んだものの真ん中が広げた付箋の上なら、離したときにその付箋へ移す(枠の色で知らせる)
     if (sel && sel.box) {
       act.drop = { x: sel.box.x + sel.box.w / 2, y: sel.box.y + sel.box.h / 2 };
@@ -1548,14 +1609,14 @@ window.addEventListener('pointermove', e => {
       act.result = act.orig.map(s => s.t === 'n' && s.id === act.nid ? { ...s, ...m } : s);
       const to = act.type === 'nmove' && pageAt(e.clientX, e.clientY);
       if (to && to !== st) noteToPage(to, e);   // 別のページに入ったら、付箋をそのページへ移す
-      else applyInk(st.pg.id, act.result);
+      else applyInk(st.pg.id, act.result, true);
       if (act.type === 'nmove') autoScroll(e);
     }
   } else if (act.type === 'scale') {
     const pt = toPage(e, st), f = clamp(Math.hypot(pt.x - act.off.x - act.ax, pt.y - act.off.y - act.ay) / act.d0, 0.1, 10);
     const scaled = act.items.map((s, i) => act.idx[i] ? scaleItem(s, act.ax, act.ay, f) : s);
     act.result = withItems(act.orig, act.nid, scaled);
-    applyInk(st.pg.id, act.result);
+    applyInk(st.pg.id, act.result, true);
     sel.set = new Set(scaled.filter((_, i) => act.idx[i])); drawSelBox();
   }
   if (act.live) queueLive();
@@ -1586,14 +1647,14 @@ function finishAct(e, cancelled) {
   if (a.type === 'move' && a.touched && a.touched.size > 1) {
     // ページをまたいで動かしたときは、両方のページをまとめて1回で元に戻せるようにする
     undoStack.push({ multi: [...a.touched].map(([pageId, before]) => ({ pageId, before, after: inkMap.get(pageId) || [] })) });
-    if (undoStack.length > 200) undoStack.shift();
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
     redoStack = []; updateUndo();
   } else if (a.type === 'move' || a.type === 'scale') {
     if (a.result !== a.orig) pushUndo(id, a.orig, a.result);
   } else if (a.type === 'nmove' && a.touched && a.touched.size > 1) {
     // ページをまたいで動かしたときは、両方のページをまとめて1回で元に戻せるようにする
     undoStack.push({ multi: [...a.touched].map(([pageId, before]) => ({ pageId, before, after: inkMap.get(pageId) || [] })) });
-    if (undoStack.length > 200) undoStack.shift();
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
     redoStack = []; updateUndo();
   } else if (a.type === 'nmove' || a.type === 'nsize') {
     if (a.moved) { if (a.result !== a.orig) pushUndo(id, a.orig, a.result); }
@@ -1703,17 +1764,23 @@ function eraseTo(pt) {
   if (on && !on.open) return;
   if (on) {
     const r = eraseList(on.ink, { x: a.x - on.x, y: a.y - on.y }, { x: pt.x - on.x, y: pt.y - on.y }, R);
-    if (r) { applyInk(st.pg.id, strokes.map(s => s === on ? { ...on, ink: r } : s)); act.changed = true; }
+    if (r) {
+      const b = { x1: r.box.x1 + on.x, y1: r.box.y1 + on.y, x2: r.box.x2 + on.x, y2: r.box.y2 + on.y };
+      applyInk(st.pg.id, strokes.map(s => s === on ? { ...on, ink: r.out } : s), b); act.changed = true;
+    }
     return;
   }
-  const out = eraseList(strokes, a, pt, R);
-  if (out) { applyInk(st.pg.id, out); act.changed = true; }
+  const r = eraseList(strokes, a, pt, R);
+  if (r) { applyInk(st.pg.id, r.out, r.box); act.changed = true; }
 }
-// a から pt まで消しゴムでなぞったあとの線の一覧(何も消えなければ null)
+// a から pt まで消しゴムでなぞったあとの線の一覧と、変わった範囲(何も消えなければ null)
 function eraseList(strokes, a, pt, R) {
-  let changed = false; const out = [];
+  let box = null; const out = [];
+  const ex1 = Math.min(a.x, pt.x) - R, ex2 = Math.max(a.x, pt.x) + R, ey1 = Math.min(a.y, pt.y) - R, ey2 = Math.max(a.y, pt.y) + R;
   for (const s of strokes) {
     if (s.t === 'i' || s.t === 'n') { out.push(s); continue; }   // 貼り付けた画像は消しゴムでは消さない(投げ縄で削除)
+    const b = strokeBox(s);
+    if (b.x2 < ex1 || b.x1 > ex2 || b.y2 < ey1 || b.y1 > ey2) { out.push(s); continue; }   // 遠い線は調べない
     const RR = R + s.w / 2, p = s.p;
     let hit = false, cutLink = false; const runs = []; let cur = [];
     for (let i = 0; i < p.length; i += 2) {
@@ -1723,10 +1790,10 @@ function eraseList(strokes, a, pt, R) {
       cur.push(p[i], p[i + 1]);
     }
     if (!hit) { out.push(s); continue; }
-    changed = true; if (cur.length) runs.push(cur);
+    box = unionBox(box, b); if (cur.length) runs.push(cur);
     for (const r of runs) if (r.length >= 4) out.push({ ...s, p: r });
   }
-  return changed ? out : null;
+  return box ? { out, box } : null;
 }
 
 // ---------- 投げ縄 ----------
